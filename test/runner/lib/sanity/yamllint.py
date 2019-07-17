@@ -1,5 +1,6 @@
 """Sanity test using yamllint."""
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import json
 import os
@@ -14,8 +15,12 @@ from lib.sanity import (
 
 from lib.util import (
     SubprocessError,
-    run_command,
     display,
+    INSTALL_ROOT,
+)
+
+from lib.util_common import (
+    run_command,
 )
 
 from lib.config import (
@@ -44,7 +49,7 @@ class YamllintTest(SanitySingleVersion):
 
             [i.path for i in targets.include if os.path.splitext(i.path)[1] == '.py' and
              os.path.basename(i.path) != '__init__.py' and
-             i.path.startswith('lib/ansible/utils/module_docs_fragments/')],
+             i.path.startswith('lib/ansible/plugins/doc_fragments/')],
         ]
 
         paths = [sorted(p) for p in paths if p]
@@ -62,7 +67,8 @@ class YamllintTest(SanitySingleVersion):
 
         return SanitySuccess(self.name)
 
-    def test_paths(self, args, paths):
+    @staticmethod
+    def test_paths(args, paths):
         """
         :type args: SanityConfig
         :type paths: list[str]
@@ -70,7 +76,7 @@ class YamllintTest(SanitySingleVersion):
         """
         cmd = [
             args.python_executable,
-            'test/sanity/yamllint/yamllinter.py',
+            os.path.join(INSTALL_ROOT, 'test/sanity/yamllint/yamllinter.py'),
         ]
 
         data = '\n'.join(paths)

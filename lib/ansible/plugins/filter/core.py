@@ -34,35 +34,36 @@ import time
 import uuid
 import yaml
 
-from collections import MutableMapping, MutableSequence
 import datetime
 from functools import partial
-from random import Random, SystemRandom, shuffle, random
+from random import Random, SystemRandom, shuffle
 
 from jinja2.filters import environmentfilter, do_groupby as _do_groupby
 
-try:
-    import passlib.hash
-    HAS_PASSLIB = True
-except ImportError:
-    HAS_PASSLIB = False
-
-from ansible.errors import AnsibleFilterError
-from ansible.module_utils.six import iteritems, string_types, integer_types
+from ansible.errors import AnsibleError, AnsibleFilterError
+from ansible.module_utils.six import iteritems, string_types, integer_types, reraise
 from ansible.module_utils.six.moves import reduce, shlex_quote
-from ansible.module_utils._text import to_bytes, to_text
+from ansible.module_utils._text import to_bytes, to_native, to_text
+from ansible.module_utils.common.collections import is_sequence
+from ansible.module_utils.common._collections_compat import Mapping, MutableMapping
 from ansible.parsing.ajson import AnsibleJSONEncoder
 from ansible.parsing.yaml.dumper import AnsibleDumper
+from ansible.template import recursive_check_defined
+from ansible.utils.display import Display
+from ansible.utils.encrypt import passlib_or_crypt
 from ansible.utils.hashing import md5s, checksum_s
 from ansible.utils.unicode import unicode_wrap
 from ansible.utils.vars import merge_hash
+
+display = Display()
 
 UUID_NAMESPACE_ANSIBLE = uuid.UUID('361E6D51-FAEC-444A-9079-341386DA8E2E')
 
 
 def to_yaml(a, *args, **kw):
     '''Make verbose, human readable yaml'''
-    transformed = yaml.dump(a, Dumper=AnsibleDumper, allow_unicode=True, **kw)
+    default_flow_style = kw.pop('default_flow_style', None)
+    transformed = yaml.dump(a, Dumper=AnsibleDumper, allow_unicode=True, default_flow_style=default_flow_style, **kw)
     return to_text(transformed)
 
 
@@ -77,27 +78,13 @@ def to_json(a, *args, **kw):
     return json.dumps(a, cls=AnsibleJSONEncoder, *args, **kw)
 
 
-def to_nice_json(a, indent=4, *args, **kw):
+def to_nice_json(a, indent=4, sort_keys=True, *args, **kw):
     '''Make verbose, human readable JSON'''
-    # python-2.6's json encoder is buggy (can't encode hostvars)
-    if sys.version_info < (2, 7):
-        try:
-            import simplejson
-        except ImportError:
-            pass
-        else:
-            try:
-                major = int(simplejson.__version__.split('.')[0])
-            except Exception:
-                pass
-            else:
-                if major >= 2:
-                    return simplejson.dumps(a, default=AnsibleJSONEncoder.default, indent=indent, sort_keys=True, *args, **kw)
-
     try:
-        return json.dumps(a, indent=indent, sort_keys=True, cls=AnsibleJSONEncoder, *args, **kw)
-    except Exception:
+        return json.dumps(a, indent=indent, sort_keys=sort_keys, separators=(',', ': '), cls=AnsibleJSONEncoder, *args, **kw)
+    except Exception as e:
         # Fallback to the to_json filter
+        display.warning(u'Unable to convert data using to_nice_json, falling back to to_json: %s' % to_text(e))
         return to_json(a, *args, **kw)
 
 
@@ -190,22 +177,43 @@ def regex_search(value, regex, *args, **kwargs):
             return items
 
 
-def ternary(value, true_val, false_val):
+def ternary(value, true_val, false_val, none_val=None):
     '''  value ? true_val : false_val '''
-    if bool(value):
+    if value is None and none_val is not None:
+        return none_val
+    elif bool(value):
         return true_val
     else:
         return false_val
 
 
-def regex_escape(string):
+def regex_escape(string, re_type='python'):
     '''Escape all regular expressions special characters from STRING.'''
-    return re.escape(string)
+    if re_type == 'python':
+        return re.escape(string)
+    elif re_type == 'posix_basic':
+        # list of BRE special chars:
+        # https://en.wikibooks.org/wiki/Regular_Expressions/POSIX_Basic_Regular_Expressions
+        return regex_replace(string, r'([].[^$*\\])', r'\\\1')
+    # TODO: implement posix_extended
+    # It's similar to, but different from python regex, which is similar to,
+    # but different from PCRE.  It's possible that re.escape would work here.
+    # https://remram44.github.io/regex-cheatsheet/regex.html#programs
+    elif re_type == 'posix_extended':
+        raise AnsibleFilterError('Regex type (%s) not yet implemented' % re_type)
+    else:
+        raise AnsibleFilterError('Invalid regex type (%s)' % re_type)
 
 
 def from_yaml(data):
     if isinstance(data, string_types):
         return yaml.safe_load(data)
+    return data
+
+
+def from_yaml_all(data):
+    if isinstance(data, string_types):
+        return yaml.safe_load_all(data)
     return data
 
 
@@ -220,7 +228,7 @@ def rand(environment, end, start=None, step=None, seed=None):
             start = 0
         if not step:
             step = 1
-        return r.randrange(start, end + 1, step)
+        return r.randrange(start, end, step)
     elif hasattr(end, '__iter__'):
         if start or step:
             raise AnsibleFilterError('start and step can only be used with integer values')
@@ -253,54 +261,40 @@ def get_hash(data, hashtype='sha1'):
     return h.hexdigest()
 
 
-def get_encrypted_password(password, hashtype='sha512', salt=None):
-
-    # TODO: find a way to construct dynamically from system
-    cryptmethod = {
-        'md5': '1',
-        'blowfish': '2a',
-        'sha256': '5',
-        'sha512': '6',
+def get_encrypted_password(password, hashtype='sha512', salt=None, salt_size=None, rounds=None):
+    passlib_mapping = {
+        'md5': 'md5_crypt',
+        'blowfish': 'bcrypt',
+        'sha256': 'sha256_crypt',
+        'sha512': 'sha512_crypt',
     }
 
-    if hashtype in cryptmethod:
-        if salt is None:
-            r = SystemRandom()
-            if hashtype in ['md5']:
-                saltsize = 8
-            else:
-                saltsize = 16
-            saltcharset = string.ascii_letters + string.digits + '/.'
-            salt = ''.join([r.choice(saltcharset) for _ in range(saltsize)])
-
-        if not HAS_PASSLIB:
-            if sys.platform.startswith('darwin'):
-                raise AnsibleFilterError('|password_hash requires the passlib python module to generate password hashes on Mac OS X/Darwin')
-            saltstring = "$%s$%s" % (cryptmethod[hashtype], salt)
-            encrypted = crypt.crypt(password, saltstring)
-        else:
-            if hashtype == 'blowfish':
-                cls = passlib.hash.bcrypt
-            else:
-                cls = getattr(passlib.hash, '%s_crypt' % hashtype)
-
-            encrypted = cls.encrypt(password, salt=salt)
-
-        return encrypted
-
-    return None
+    hashtype = passlib_mapping.get(hashtype, hashtype)
+    try:
+        return passlib_or_crypt(password, hashtype, salt=salt, salt_size=salt_size, rounds=rounds)
+    except AnsibleError as e:
+        reraise(AnsibleFilterError, AnsibleFilterError(to_native(e), orig_exc=e), sys.exc_info()[2])
 
 
 def to_uuid(string):
     return str(uuid.uuid5(UUID_NAMESPACE_ANSIBLE, str(string)))
 
 
-def mandatory(a):
+def mandatory(a, msg=None):
     from jinja2.runtime import Undefined
 
     ''' Make a variable mandatory '''
     if isinstance(a, Undefined):
-        raise AnsibleFilterError('Mandatory variable not defined.')
+        if a._undefined_name is not None:
+            name = "'%s' " % to_text(a._undefined_name)
+        else:
+            name = ''
+
+        if msg is not None:
+            raise AnsibleFilterError(to_native(msg))
+        else:
+            raise AnsibleFilterError("Mandatory variable %s not defined." % name)
+
     return a
 
 
@@ -312,8 +306,10 @@ def combine(*terms, **kwargs):
     dicts = []
     for t in terms:
         if isinstance(t, MutableMapping):
+            recursive_check_defined(t)
             dicts.append(t)
         elif isinstance(t, list):
+            recursive_check_defined(t)
             dicts.append(combine(*t, **kwargs))
         else:
             raise AnsibleFilterError("|combine expects dictionaries, got " + repr(t))
@@ -459,12 +455,12 @@ def flatten(mylist, levels=None):
         if element in (None, 'None', 'null'):
             # ignore undefined items
             break
-        elif isinstance(element, MutableSequence):
+        elif is_sequence(element):
             if levels is None:
                 ret.extend(flatten(element))
             elif levels >= 1:
-                levels = int(levels) - 1
-                ret.extend(flatten(element, levels=levels))
+                # decrement as we go down the stack
+                ret.extend(flatten(element, levels=(int(levels) - 1)))
             else:
                 ret.append(element)
         else:
@@ -519,20 +515,30 @@ def subelements(obj, subelements, skip_missing=False):
     return results
 
 
-def dict_to_list_of_dict_key_value_elements(mydict):
+def dict_to_list_of_dict_key_value_elements(mydict, key_name='key', value_name='value'):
     ''' takes a dictionary and transforms it into a list of dictionaries,
         with each having a 'key' and 'value' keys that correspond to the keys and values of the original '''
 
-    if not isinstance(mydict, MutableMapping):
+    if not isinstance(mydict, Mapping):
         raise AnsibleFilterError("dict2items requires a dictionary, got %s instead." % type(mydict))
 
     ret = []
     for key in mydict:
-        ret.append({'key': key, 'value': mydict[key]})
+        ret.append({key_name: key, value_name: mydict[key]})
     return ret
 
 
-def random_mac(value):
+def list_of_dict_key_value_elements_to_dict(mylist, key_name='key', value_name='value'):
+    ''' takes a list of dicts with each having a 'key' and 'value' keys, and transforms the list into a dictionary,
+        effectively as the reverse of dict2items '''
+
+    if not is_sequence(mylist):
+        raise AnsibleFilterError("items2dict requires a list, got %s instead." % type(mylist))
+
+    return dict((item[key_name], item[value_name]) for item in mylist)
+
+
+def random_mac(value, seed=None):
     ''' takes string prefix, and return it completed with random bytes
         to get a complete 6 bytes MAC address '''
 
@@ -557,8 +563,12 @@ def random_mac(value):
     if len(err):
         raise AnsibleFilterError('Invalid value (%s) for random_mac: %s' % (value, err))
 
-    # Generate random float and make it int
-    v = int(random() * 10.0**10)
+    if seed is None:
+        r = SystemRandom()
+    else:
+        r = Random(seed)
+    # Generate random int between x1000000000 and xFFFFFFFFFF
+    v = r.randint(68719476736, 1099511627775)
     # Select first n chars to complement input prefix
     remain = 2 * (6 - len(mac_items))
     rnd = ('%x' % v)[:remain]
@@ -589,6 +599,7 @@ class FilterModule(object):
             'to_yaml': to_yaml,
             'to_nice_yaml': to_nice_yaml,
             'from_yaml': from_yaml,
+            'from_yaml_all': from_yaml_all,
 
             # path
             'basename': partial(unicode_wrap, os.path.basename),
@@ -609,7 +620,7 @@ class FilterModule(object):
             'bool': to_bool,
             'to_datetime': to_datetime,
 
-            # date formating
+            # date formatting
             'strftime': strftime,
 
             # quote string for shell usage
@@ -618,7 +629,7 @@ class FilterModule(object):
             # hash filters
             # md5 hex digest of string
             'md5': md5s,
-            # sha1 hex digeset of string
+            # sha1 hex digest of string
             'sha1': checksum_s,
             # checksum of string as used by ansible for checksumming files
             'checksum': checksum_s,
@@ -653,6 +664,7 @@ class FilterModule(object):
             'extract': extract,
             'flatten': flatten,
             'dict2items': dict_to_list_of_dict_key_value_elements,
+            'items2dict': list_of_dict_key_value_elements_to_dict,
             'subelements': subelements,
 
             # Misc

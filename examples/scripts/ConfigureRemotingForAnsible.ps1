@@ -50,6 +50,7 @@
 # Version 1.6 - 2017-04-18
 # Version 1.7 - 2017-11-23
 # Version 1.8 - 2018-02-23
+# Version 1.9 - 2018-09-21
 
 # Support -Verbose option
 [CmdletBinding()]
@@ -92,7 +93,7 @@ Function New-LegacySelfSignedCert
         [int]$ValidDays = 1095
     )
 
-    $hostnonFQDN = $env:computerName 
+    $hostnonFQDN = $env:computerName
     $hostFQDN = [System.Net.Dns]::GetHostByName(($env:computerName)).Hostname
     $SignatureAlgorithm = "SHA256"
 
@@ -169,7 +170,7 @@ Function Enable-GlobalHttpFirewallAccess
 
     # try to find/enable the default rule first
     $add_rule = $false
-    $matching_rules = $fw.Rules | ? { $_.Name -eq "Windows Remote Management (HTTP-In)" }
+    $matching_rules = $fw.Rules | Where-Object  { $_.Name -eq "Windows Remote Management (HTTP-In)" }
     $rule = $null
     If ($matching_rules) {
         If ($matching_rules -isnot [Array]) {
@@ -179,7 +180,7 @@ Function Enable-GlobalHttpFirewallAccess
         Else {
             # try to find one with the All or Public profile first
             Write-Verbose "Found multiple existing HTTP firewall rules..."
-            $rule = $matching_rules | % { $_.Profiles -band 4 }[0]
+            $rule = $matching_rules | ForEach-Object { $_.Profiles -band 4 }[0]
 
             If (-not $rule -or $rule -is [Array]) {
                 Write-Verbose "Editing an arbitrary single HTTP firewall rule (multiple existed)"
@@ -293,9 +294,23 @@ Else
     Write-Verbose "PS Remoting is already enabled."
 }
 
+# Ensure LocalAccountTokenFilterPolicy is set to 1
+# https://github.com/ansible/ansible/issues/42978
+$token_path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+$token_prop_name = "LocalAccountTokenFilterPolicy"
+$token_key = Get-Item -Path $token_path
+$token_value = $token_key.GetValue($token_prop_name, $null)
+if ($token_value -ne 1) {
+    Write-Verbose "Setting LocalAccountTOkenFilterPolicy to 1"
+    if ($null -ne $token_value) {
+        Remove-ItemProperty -Path $token_path -Name $token_prop_name
+    }
+    New-ItemProperty -Path $token_path -Name $token_prop_name -Value 1 -PropertyType DWORD > $null
+}
+
 # Make sure there is a SSL listener.
 $listeners = Get-ChildItem WSMan:\localhost\Listener
-If (!($listeners | Where {$_.Keys -like "TRANSPORT=HTTPS"}))
+If (!($listeners | Where-Object {$_.Keys -like "TRANSPORT=HTTPS"}))
 {
     # We cannot use New-SelfSignedCertificate on 2012R2 and earlier
     $thumbprint = New-LegacySelfSignedCert -SubjectName $SubjectName -ValidDays $CertValidityDays
@@ -348,9 +363,9 @@ Else
 # Check for basic authentication.
 $basicAuthSetting = Get-ChildItem WSMan:\localhost\Service\Auth | Where-Object {$_.Name -eq "Basic"}
 
-If ($DisableBasicAuth) 
+If ($DisableBasicAuth)
 {
-    If (($basicAuthSetting.Value) -eq $true) 
+    If (($basicAuthSetting.Value) -eq $true)
     {
         Write-Verbose "Disabling basic auth support."
         Set-Item -Path "WSMan:\localhost\Service\Auth\Basic" -Value $false
@@ -360,8 +375,8 @@ If ($DisableBasicAuth)
     {
         Write-Verbose "Basic auth is already disabled."
     }
-} 
-Else 
+}
+Else
 {
     If (($basicAuthSetting.Value) -eq $false)
     {
@@ -379,7 +394,7 @@ Else
 If ($EnableCredSSP)
 {
     # Check for CredSSP authentication
-    $credsspAuthSetting = Get-ChildItem WSMan:\localhost\Service\Auth | Where {$_.Name -eq "CredSSP"}
+    $credsspAuthSetting = Get-ChildItem WSMan:\localhost\Service\Auth | Where-Object {$_.Name -eq "CredSSP"}
     If (($credsspAuthSetting.Value) -eq $false)
     {
         Write-Verbose "Enabling CredSSP auth support."

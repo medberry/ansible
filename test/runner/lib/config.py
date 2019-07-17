@@ -1,16 +1,23 @@
 """Configuration classes."""
-
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import os
 import sys
 
+import lib.types as t
+
 from lib.util import (
-    CommonConfig,
     is_shippable,
     docker_qualify_image,
     find_python,
     generate_pip_command,
+    get_docker_completion,
+    ApplicationError,
+)
+
+from lib.util_common import (
+    CommonConfig,
 )
 
 from lib.metadata import (
@@ -23,10 +30,9 @@ class EnvironmentConfig(CommonConfig):
     def __init__(self, args, command):
         """
         :type args: any
+        :type command: str
         """
-        super(EnvironmentConfig, self).__init__(args)
-
-        self.command = command
+        super(EnvironmentConfig, self).__init__(args, command)
 
         self.local = args.local is True
 
@@ -40,12 +46,17 @@ class EnvironmentConfig(CommonConfig):
             self.python = args.tox  # type: str
 
         self.docker = docker_qualify_image(args.docker)  # type: str
+        self.docker_raw = args.docker  # type: str
         self.remote = args.remote  # type: str
 
         self.docker_privileged = args.docker_privileged if 'docker_privileged' in args else False  # type: bool
         self.docker_pull = args.docker_pull if 'docker_pull' in args else False  # type: bool
         self.docker_keep_git = args.docker_keep_git if 'docker_keep_git' in args else False  # type: bool
+        self.docker_seccomp = args.docker_seccomp if 'docker_seccomp' in args else None  # type: str
         self.docker_memory = args.docker_memory if 'docker_memory' in args else None
+
+        if self.docker_seccomp is None:
+            self.docker_seccomp = get_docker_completion().get(self.docker_raw, {}).get('seccomp', 'default')
 
         self.tox_sitepackages = args.tox_sitepackages  # type: bool
 
@@ -62,15 +73,22 @@ class EnvironmentConfig(CommonConfig):
         if self.python == 'default':
             self.python = None
 
-        self.python_version = self.python or '.'.join(str(i) for i in sys.version_info[:2])
+        actual_major_minor = '.'.join(str(i) for i in sys.version_info[:2])
+
+        self.python_version = self.python or actual_major_minor
+        self.python_interpreter = args.python_interpreter
 
         self.delegate = self.tox or self.docker or self.remote
+        self.delegate_args = []  # type: t.List[str]
 
         if self.delegate:
             self.requirements = True
 
         self.inject_httptester = args.inject_httptester if 'inject_httptester' in args else False  # type: bool
         self.httptester = docker_qualify_image(args.httptester if 'httptester' in args else '')  # type: str
+
+        if args.check_python and args.check_python != actual_major_minor:
+            raise ApplicationError('Running under Python %s instead of Python %s as expected.' % (actual_major_minor, args.check_python))
 
     @property
     def python_executable(self):
@@ -98,9 +116,11 @@ class TestConfig(EnvironmentConfig):
 
         self.coverage = args.coverage  # type: bool
         self.coverage_label = args.coverage_label  # type: str
-        self.include = args.include  # type: list [str]
-        self.exclude = args.exclude  # type: list [str]
-        self.require = args.require  # type: list [str]
+        self.coverage_check = args.coverage_check  # type: bool
+        self.coverage_config_base_path = None  # type: t.Optional[str]
+        self.include = args.include or []  # type: t.List[str]
+        self.exclude = args.exclude or []  # type: t.List[str]
+        self.require = args.require or []  # type: t.List[str]
 
         self.changed = args.changed  # type: bool
         self.tracked = args.tracked  # type: bool
@@ -109,7 +129,7 @@ class TestConfig(EnvironmentConfig):
         self.staged = args.staged  # type: bool
         self.unstaged = args.unstaged  # type: bool
         self.changed_from = args.changed_from  # type: str
-        self.changed_path = args.changed_path  # type: list [str]
+        self.changed_path = args.changed_path  # type: t.List[str]
 
         self.lint = args.lint if 'lint' in args else False  # type: bool
         self.junit = args.junit if 'junit' in args else False  # type: bool
@@ -117,6 +137,9 @@ class TestConfig(EnvironmentConfig):
 
         self.metadata = Metadata.from_file(args.metadata) if args.metadata else Metadata()
         self.metadata_path = None
+
+        if self.coverage_check:
+            self.coverage = True
 
 
 class ShellConfig(EnvironmentConfig):
@@ -127,6 +150,11 @@ class ShellConfig(EnvironmentConfig):
         """
         super(ShellConfig, self).__init__(args, 'shell')
 
+        self.raw = args.raw  # type: bool
+
+        if self.raw:
+            self.httptester = False
+
 
 class SanityConfig(TestConfig):
     """Configuration for the sanity command."""
@@ -136,8 +164,8 @@ class SanityConfig(TestConfig):
         """
         super(SanityConfig, self).__init__(args, 'sanity')
 
-        self.test = args.test  # type: list [str]
-        self.skip_test = args.skip_test  # type: list [str]
+        self.test = args.test  # type: t.List[str]
+        self.skip_test = args.skip_test  # type: t.List[str]
         self.list_tests = args.list_tests  # type: bool
         self.allow_disabled = args.allow_disabled  # type: bool
 
@@ -173,10 +201,13 @@ class IntegrationConfig(TestConfig):
         self.continue_on_error = args.continue_on_error  # type: bool
         self.debug_strategy = args.debug_strategy  # type: bool
         self.changed_all_target = args.changed_all_target  # type: str
+        self.changed_all_mode = args.changed_all_mode  # type: str
         self.list_targets = args.list_targets  # type: bool
         self.tags = args.tags
         self.skip_tags = args.skip_tags
         self.diff = args.diff
+        self.no_temp_workdir = args.no_temp_workdir
+        self.no_temp_unicode = args.no_temp_unicode
 
         if self.list_targets:
             self.explain = True
@@ -201,7 +232,7 @@ class WindowsIntegrationConfig(IntegrationConfig):
         """
         super(WindowsIntegrationConfig, self).__init__(args, 'windows-integration')
 
-        self.windows = args.windows  # type: list [str]
+        self.windows = args.windows  # type: t.List[str]
 
         if self.windows:
             self.allow_destructive = True
@@ -216,7 +247,7 @@ class NetworkIntegrationConfig(IntegrationConfig):
         """
         super(NetworkIntegrationConfig, self).__init__(args, 'network-integration')
 
-        self.platform = args.platform  # type: list [str]
+        self.platform = args.platform  # type: t.List[str]
         self.inventory = args.inventory  # type: str
         self.testcase = args.testcase  # type: str
 
@@ -230,6 +261,14 @@ class UnitsConfig(TestConfig):
         super(UnitsConfig, self).__init__(args, 'units')
 
         self.collect_only = args.collect_only  # type: bool
+        self.num_workers = args.num_workers  # type: int
+
+        self.requirements_mode = args.requirements_mode if 'requirements_mode' in args else ''
+
+        if self.requirements_mode == 'only':
+            self.requirements = True
+        elif self.requirements_mode == 'skip':
+            self.requirements = False
 
 
 class CoverageConfig(EnvironmentConfig):
@@ -240,7 +279,7 @@ class CoverageConfig(EnvironmentConfig):
         """
         super(CoverageConfig, self).__init__(args, 'coverage')
 
-        self.group_by = frozenset(args.group_by) if 'group_by' in args and args.group_by else set()  # type: frozenset [str]
+        self.group_by = frozenset(args.group_by) if 'group_by' in args and args.group_by else set()  # type: t.FrozenSet[str]
         self.all = args.all if 'all' in args else False  # type: bool
         self.stub = args.stub if 'stub' in args else False  # type: bool
 

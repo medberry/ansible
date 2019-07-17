@@ -1,6 +1,6 @@
 """Classes for storing and processing test results."""
-
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import datetime
 import json
@@ -8,6 +8,7 @@ import os
 
 from lib.util import (
     display,
+    make_dirs,
 )
 
 from lib.config import (
@@ -55,7 +56,7 @@ def calculate_confidence(path, line, metadata):
     return 50
 
 
-class TestResult(object):
+class TestResult:
     """Base class for test results."""
     def __init__(self, command, test, python_version=None):
         """
@@ -96,23 +97,19 @@ class TestResult(object):
 
     def write_console(self):
         """Write results to console."""
-        pass
 
     def write_lint(self):
         """Write lint results to stdout."""
-        pass
 
     def write_bot(self, args):
         """
         :type args: TestConfig
         """
-        pass
 
     def write_junit(self, args):
         """
         :type args: TestConfig
         """
-        pass
 
     def create_path(self, directory, extension):
         """
@@ -157,6 +154,56 @@ class TestResult(object):
 
         with open(path, 'wb') as xml:
             xml.write(report.encode('utf-8', 'strict'))
+
+
+class TestTimeout(TestResult):
+    """Test timeout."""
+    def __init__(self, timeout_duration):
+        """
+        :type timeout_duration: int
+        """
+        super(TestTimeout, self).__init__(command='timeout', test='')
+
+        self.timeout_duration = timeout_duration
+
+    def write(self, args):
+        """
+        :type args: TestConfig
+        """
+        message = 'Tests were aborted after exceeding the %d minute time limit.' % self.timeout_duration
+
+        # Include a leading newline to improve readability on Shippable "Tests" tab.
+        # Without this, the first line becomes indented.
+        output = '''
+One or more of the following situations may be responsible:
+
+- Code changes have resulted in tests that hang or run for an excessive amount of time.
+- Tests have been added which exceed the time limit when combined with existing tests.
+- Test infrastructure and/or external dependencies are operating slower than normal.'''
+
+        if args.coverage:
+            output += '\n- Additional overhead from collecting code coverage has resulted in tests exceeding the time limit.'
+
+        output += '\n\nConsult the console log for additional details on where the timeout occurred.'
+
+        timestamp = datetime.datetime.utcnow().replace(microsecond=0).isoformat()
+
+        # hack to avoid requiring junit-xml, which isn't pre-installed on Shippable outside our test containers
+        xml = '''
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites disabled="0" errors="1" failures="0" tests="1" time="0.0">
+\t<testsuite disabled="0" errors="1" failures="0" file="None" log="None" name="ansible-test" skipped="0" tests="1" time="0" timestamp="%s" url="None">
+\t\t<testcase classname="timeout" name="timeout">
+\t\t\t<error message="%s" type="error">%s</error>
+\t\t</testcase>
+\t</testsuite>
+</testsuites>
+''' % (timestamp, message, output)
+
+        path = self.create_path('junit', '.xml')
+
+        with open(path, 'w') as junit_fd:
+            junit_fd.write(xml.lstrip())
 
 
 class TestSuccess(TestResult):
@@ -286,6 +333,8 @@ class TestFailure(TestResult):
         if args.explain:
             return
 
+        make_dirs(os.path.dirname(path))
+
         with open(path, 'w') as bot_fd:
             json.dump(bot_data, bot_fd, indent=4, sort_keys=True)
             bot_fd.write('\n')
@@ -369,7 +418,7 @@ class TestFailure(TestResult):
         return message
 
 
-class TestMessage(object):
+class TestMessage:
     """Single test message for one file."""
     def __init__(self, message, path, line=0, column=0, level='error', code=None, confidence=None):
         """

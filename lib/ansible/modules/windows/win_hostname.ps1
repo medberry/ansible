@@ -1,4 +1,5 @@
 #!powershell
+
 # Copyright: (c) 2018, Ripon Banik (@riponbanik)
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -10,7 +11,8 @@ $params = Parse-Args $args -supports_check_mode $true
 $name = Get-AnsibleParam -obj $params -name "name" -type "str" -failifempty $true
 $check_mode = Get-AnsibleParam -obj $params -name "_ansible_check_mode" -type "bool" -default $false
 
-$current_computer_name = $env:ComputerName
+$current_computer_name = (Get-CimInstance -Class Win32_ComputerSystem).DNSHostname
+
 $result = @{
    changed = $false
    old_name = $current_computer_name

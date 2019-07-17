@@ -1,190 +1,88 @@
-- name: Install requirements
-  pip:
-    name: openshift
+- set_fact:
+    virtualenv: "{{ remote_tmp_dir }}/virtualenv"
+    virtualenv_command: "{{ ansible_python_interpreter }} -m virtualenv"
 
-# Kubernetes resources
-- name: Create a namespace
-  k8s:
-    name: testing
-    kind: namespace
-  register: output
+- set_fact:
+    virtualenv_interpreter: "{{ virtualenv }}/bin/python"
 
-- name: show output
-  debug:
-    var: output
+- pip:
+    name: virtualenv
 
-- name: Create a service
-  k8s:
-    state: present
-    resource_definition: &svc
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: web
-        namespace: testing
-        labels:
-          app: galaxy
-          service: web
-      spec:
-        selector:
-          app: galaxy
-          service: web
-        ports:
-        - protocol: TCP
-          targetPort: 8000
-          name: port-8000-tcp
-          port: 8000
-  register: output
+# Test graceful failure for missing kubernetes-validate
 
-- name: show output
-  debug:
-    var: output
+- pip:
+    name:
+      - 'openshift>=0.9.0'
+      - coverage
+    virtualenv: "{{ virtualenv }}"
+    virtualenv_command: "{{ virtualenv_command }}"
+    virtualenv_site_packages: no
 
-- name: Create the service again
-  k8s:
-    state: present
-    resource_definition: *svc
-  register: output
+- include_tasks: validate_not_installed.yml
+  vars:
+    ansible_python_interpreter: "{{ virtualenv_interpreter }}"
 
-- name: Service creation should be idempotent
-  assert:
-    that: not output.changed
+- file:
+    path: "{{ virtualenv }}"
+    state: absent
 
-- name: Create PVC
-  k8s:
-    state: present
-    inline: &pvc
-      apiVersion: v1
-      kind: PersistentVolumeClaim
-      metadata:
-        name: elastic-volume
-        namespace: testing
-      spec:
-        resources:
-          requests:
-            storage: 5Gi
-        accessModes:
-        - ReadWriteOnce
+# Test validate with kubernetes-validate
 
-- name: Show output
-  debug:
-    var: output
+- pip:
+    name:
+      - kubernetes-validate==1.12.0
+      - 'openshift>=0.9.0'
+      - coverage
+    virtualenv: "{{ virtualenv }}"
+    virtualenv_command: "{{ virtualenv_command }}"
+    virtualenv_site_packages: no
 
-- name: Create the PVC again
-  k8s:
-    state: present
-    inline: *pvc
+- include_tasks: validate_installed.yml
+  vars:
+    ansible_python_interpreter: "{{ virtualenv_interpreter }}"
+    playbook_namespace: ansible-test-k8s-validate
 
-- name: PVC creation should be idempotent
-  assert:
-    that: not output.changed
+- file:
+    path: "{{ virtualenv }}"
+    state: absent
 
-- name: Create deployment
-  k8s:
-    state: present
-    inline: &deployment
-      apiVersion: apps/v1beta1
-      kind: Deployment
-      metadata:
-        name: elastic
-        labels:
-          app: galaxy
-          service: elastic
-        namespace: testing
-      spec:
-        template:
-          metadata:
-            labels:
-              app: galaxy
-              service: elastic
-          spec:
-            containers:
-              - name: elastic
-                volumeMounts:
-                - mountPath: /usr/share/elasticsearch/data
-                  name: elastic-volume
-                command: ['elasticsearch']
-                image: 'ansible/galaxy-elasticsearch:2.4.6'
-            volumes:
-            - name: elastic-volume
-              persistentVolumeClaim:
-                claimName: elastic-volume
-        replicas: 1
-        strategy:
-          type: RollingUpdate
-  register: output
+# Test graceful failure for older versions of openshift
 
-- name: Show output
-  debug:
-    var: output
+- pip:
+    name:
+      - openshift==0.6.0
+      - kubernetes==6.0.0
+      - coverage
+    virtualenv: "{{ virtualenv }}"
+    virtualenv_command: "{{ virtualenv_command }}"
+    virtualenv_site_packages: no
 
-- name: Create deployment again
-  k8s:
-    state: present
-    inline: *deployment
-  register: output
+- include_tasks: older_openshift_fail.yml
+  vars:
+    ansible_python_interpreter: "{{ virtualenv_interpreter }}"
+    recreate_crd_default_merge_expectation: recreate_crd is failed
+    playbook_namespace: ansible-test-k8s-older-openshift
 
-- name: Deployment creation should be idempotent
-  assert:
-    that: not output.changed
+- file:
+    path: "{{ virtualenv }}"
+    state: absent
 
-# OpenShift Resources
-- name: Create a project
-  k8s:
-    name: testing
-    kind: project
-    api_version: v1
-  register: output
+# Run full test suite
 
-- name: show output
-  debug:
-    var: output
+- pip:
+    name:
+      - 'openshift>=0.9.0'
+      - coverage
+    virtualenv: "{{ virtualenv }}"
+    virtualenv_command: "{{ virtualenv_command }}"
+    virtualenv_site_packages: no
 
-- name: Create deployment config
-  k8s:
-    state: present
-    inline: &dc
-      apiVersion: v1
-      kind: DeploymentConfig
-      metadata:
-        name: elastic
-        labels:
-          app: galaxy
-          service: elastic
-        namespace: testing
-      spec:
-        template:
-          metadata:
-            labels:
-              app: galaxy
-              service: elastic
-          spec:
-            containers:
-              - name: elastic
-                volumeMounts:
-                - mountPath: /usr/share/elasticsearch/data
-                  name: elastic-volume
-                command: ['elasticsearch']
-                image: 'ansible/galaxy-elasticsearch:2.4.6'
-            volumes:
-            - name: elastic-volume
-              persistentVolumeClaim:
-                claimName: elastic-volume
-        replicas: 1
-        strategy:
-          type: Rolling
-  register: output
+- include_tasks: full_test.yml
+  vars:
+    ansible_python_interpreter: "{{ virtualenv_interpreter }}"
+    create_crd_with_apply: no
+    playbook_namespace: ansible-test-k8s-full
 
-- name: Show output
-  debug:
-    var: output
-
-- name: Create deployment config again
-  k8s:
-    state: present
-    inline: *dc
-  register: output
-
-- name: DC creation should be idempotent
-  assert:
-    that: not output.changed
+- file:
+    path: "{{ virtualenv }}"
+    state: absent

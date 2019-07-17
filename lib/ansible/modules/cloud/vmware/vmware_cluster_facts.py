@@ -18,7 +18,7 @@ DOCUMENTATION = '''
 module: vmware_cluster_facts
 short_description: Gather facts about clusters available in given vCenter
 description:
-    - This module can be used to gather facts about clusters in VMWare infrastructure.
+    - This module can be used to gather facts about clusters in VMware infrastructure.
     - All values and VMware object names are case sensitive.
 version_added: '2.6'
 author:
@@ -46,21 +46,20 @@ extends_documentation_fragment: vmware.documentation
 EXAMPLES = '''
 - name: Gather cluster facts from given datacenter
   vmware_cluster_facts:
-    hostname: 192.168.1.209
-    username: administrator@vsphere.local
-    password: vmware
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
     datacenter: ha-datacenter
-    validate_certs: False
+    validate_certs: no
   delegate_to: localhost
   register: cluster_facts
 
 - name: Gather facts from datacenter about specific cluster
   vmware_cluster_facts:
-    hostname: 192.168.1.209
-    username: administrator@vsphere.local
-    password: vmware
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
     cluster_name: DC0_C0
-    validate_certs: False
   delegate_to: localhost
   register: cluster_facts
 '''
@@ -216,6 +215,7 @@ def main():
         required_one_of=[
             ['cluster_name', 'datacenter'],
         ],
+        supports_check_mode=True,
     )
     pyv = VmwreClusterFactsManager(module)
     pyv.gather_cluster_facts()

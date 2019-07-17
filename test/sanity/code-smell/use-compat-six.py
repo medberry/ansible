@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import os
 import re
@@ -11,25 +13,6 @@ def main():
         # digital_ocean is checking for six because dopy doesn't specify the
         # requirement on six so it needs to try importing six to give the correct error message
         'lib/ansible/modules/cloud/digital_ocean/digital_ocean.py',
-        # correct imports in the following files and remove them from this list
-        'contrib/inventory/apache-libcloud.py',
-        'contrib/inventory/cobbler.py',
-        'contrib/inventory/collins.py',
-        'contrib/inventory/consul_io.py',
-        'contrib/inventory/ec2.py',
-        'contrib/inventory/freeipa.py',
-        'contrib/inventory/lxd.py',
-        'contrib/inventory/nova.py',
-        'contrib/inventory/nsot.py',
-        'contrib/inventory/packet_net.py',
-        'contrib/inventory/proxmox.py',
-        'contrib/inventory/rax.py',
-        'contrib/inventory/rudder.py',
-        'contrib/inventory/scaleway.py',
-        'contrib/inventory/spacewalk.py',
-        'contrib/inventory/vmware.py',
-        'contrib/inventory/vmware_inventory.py',
-        'docs/bin/plugin_formatter.py',
     ])
 
     for path in sys.argv[1:] or sys.stdin.read().splitlines():

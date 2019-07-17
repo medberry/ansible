@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import sys
 
@@ -10,6 +12,7 @@ def main():
         'test/integration/targets/win_template/files/foo.dos.txt',
         'test/integration/targets/win_module_utils/library/legacy_only_new_way_win_line_ending.ps1',
         'test/integration/targets/win_module_utils/library/legacy_only_old_way_win_line_ending.ps1',
+        'test/units/modules/network/routeros/fixtures/system_package_print',
     ])
 
     for path in sys.argv[1:] or sys.stdin.read().splitlines():

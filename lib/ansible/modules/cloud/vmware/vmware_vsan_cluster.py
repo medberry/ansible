@@ -34,11 +34,8 @@ extends_documentation_fragment: vmware.documentation
 '''
 
 EXAMPLES = '''
-# Example command from Ansible Playbook
-
 - name: Configure VMware VSAN Cluster
   hosts: deploy_node
-  gather_facts: False
   tags:
     - vsan
   tasks:
@@ -47,6 +44,7 @@ EXAMPLES = '''
          hostname: "{{ groups['esxi'][0] }}"
          username: "{{ esxi_username }}"
          password: "{{ site_password }}"
+      delegate_to: localhost
       register: vsan_cluster
 
     - name: Configure VSAN on remaining hosts
@@ -55,8 +53,8 @@ EXAMPLES = '''
          username: "{{ esxi_username }}"
          password: "{{ site_password }}"
          cluster_uuid: "{{ vsan_cluster.cluster_uuid }}"
-      with_items: "{{ groups['esxi'][1:] }}"
-
+      delegate_to: localhost
+      loop: "{{ groups['esxi'][1:] }}"
 '''
 
 try:
@@ -110,7 +108,7 @@ def main():
         host = get_all_objs(content, [vim.HostSystem])
         if not host:
             module.fail_json(msg="Unable to locate Physical Host.")
-        host_system = host.keys()[0]
+        host_system = list(host)[0]
         changed, result, cluster_uuid = create_vsan_cluster(host_system, new_cluster_uuid)
         module.exit_json(changed=changed, result=result, cluster_uuid=cluster_uuid)
 

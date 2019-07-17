@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Wrapper around yamllint that supports YAML embedded in Ansible modules."""
-
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import ast
 import json
@@ -21,7 +21,7 @@ def main():
     checker.report()
 
 
-class YamlChecker(object):
+class YamlChecker:
     """Wrapper around yamllint that supports YAML embedded in Ansible modules."""
     def __init__(self):
         self.messages = []
@@ -38,9 +38,11 @@ class YamlChecker(object):
         """
         :type paths: str
         """
-        yaml_conf = YamlLintConfig(file='test/sanity/yamllint/config/default.yml')
-        module_conf = YamlLintConfig(file='test/sanity/yamllint/config/modules.yml')
-        plugin_conf = YamlLintConfig(file='test/sanity/yamllint/config/plugins.yml')
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config')
+
+        yaml_conf = YamlLintConfig(file=os.path.join(config_path, 'default.yml'))
+        module_conf = YamlLintConfig(file=os.path.join(config_path, 'modules.yml'))
+        plugin_conf = YamlLintConfig(file=os.path.join(config_path, 'plugins.yml'))
 
         for path in paths:
             extension = os.path.splitext(path)[1]
@@ -147,7 +149,7 @@ class YamlChecker(object):
             for body_statement in module_ast.body:
                 if isinstance(body_statement, ast.Assign):
                     check_assignment(body_statement, module_doc_types)
-        elif path.startswith('lib/ansible/utils/module_docs_fragments/'):
+        elif path.startswith('lib/ansible/plugins/doc_fragments/'):
             for body_statement in module_ast.body:
                 if isinstance(body_statement, ast.ClassDef):
                     for class_statement in body_statement.body:
@@ -175,7 +177,7 @@ class YamlChecker(object):
                 column=ex.offset,
                 level='error',
             ))
-        except Exception as ex:
+        except Exception as ex:  # pylint: disable=broad-except
             self.messages.append(dict(
                 code='python-parse-error',
                 message=str(ex),

@@ -17,7 +17,7 @@ DOCUMENTATION = '''
 ---
 module: azure_rm_sqlserver_facts
 version_added: "2.5"
-short_description: Get SQL Server facts.
+short_description: Get SQL Server facts
 description:
     - Get facts of SQL Server.
 
@@ -35,29 +35,31 @@ extends_documentation_fragment:
     - azure_tags
 
 author:
-    - "Zim Kalinowski (@zikalino)"
+    - Zim Kalinowski (@zikalino)
 
 '''
 
 EXAMPLES = '''
   - name: Get instance of SQL Server
     azure_rm_sqlserver_facts:
-      resource_group: resource_group_name
+      resource_group: myResourceGroup
       server_name: server_name
 
   - name: List instances of SQL Server
     azure_rm_sqlserver_facts:
-      resource_group: resource_group_name
+      resource_group: myResourceGroup
 '''
 
 RETURN = '''
 servers:
-    description: A list of dict results where the key is the name of the SQL Server and the values are the facts for that SQL Server.
+    description:
+        - A list of dict results where the key is the name of the SQL Server and the values are the facts for that SQL Server.
     returned: always
     type: complex
     contains:
         sqlserver_name:
-            description: The key is the name of the server that the values relate to.
+            description:
+                - The key is the name of the server that the values relate to.
             type: complex
             contains:
                 id:
@@ -65,7 +67,7 @@ servers:
                         - Resource ID.
                     returned: always
                     type: str
-                    sample: /subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/sqlcrudtest-7398/providers/Microsoft.Sql/servers/sqlcrudtest-4645
+                    sample: /subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/myResourceGroup/providers/Microsoft.Sql/servers/sqlcrudtest-4645
                 name:
                     description:
                         - Resource name.
@@ -114,7 +116,6 @@ from ansible.module_utils.azure_rm_common import AzureRMModuleBase
 
 try:
     from msrestazure.azure_exceptions import CloudError
-    from msrestazure.azure_operation import AzureOperationPoller
     from azure.mgmt.sql import SqlManagementClient
     from msrest.serialization import Model
 except ImportError:
@@ -122,7 +123,7 @@ except ImportError:
     pass
 
 
-class AzureRMServersFacts(AzureRMModuleBase):
+class AzureRMSqlServerFacts(AzureRMModuleBase):
     def __init__(self):
         # define user inputs into argument
         self.module_arg_spec = dict(
@@ -139,16 +140,13 @@ class AzureRMServersFacts(AzureRMModuleBase):
             changed=False,
             ansible_facts=dict()
         )
-        self.mgmt_client = None
         self.resource_group = None
         self.server_name = None
-        super(AzureRMServersFacts, self).__init__(self.module_arg_spec)
+        super(AzureRMSqlServerFacts, self).__init__(self.module_arg_spec)
 
     def exec_module(self, **kwargs):
         for key in self.module_arg_spec:
             setattr(self, key, kwargs[key])
-        self.mgmt_client = self.get_mgmt_svc_client(SqlManagementClient,
-                                                    base_url=self._cloud_environment.endpoints.resource_manager)
 
         if (self.resource_group is not None and
                 self.server_name is not None):
@@ -166,8 +164,8 @@ class AzureRMServersFacts(AzureRMModuleBase):
         response = None
         results = {}
         try:
-            response = self.mgmt_client.servers.get(resource_group_name=self.resource_group,
-                                                    server_name=self.server_name)
+            response = self.sql_client.servers.get(resource_group_name=self.resource_group,
+                                                   server_name=self.server_name)
             self.log("Response : {0}".format(response))
         except CloudError as e:
             self.log('Could not get facts for Servers.')
@@ -186,7 +184,7 @@ class AzureRMServersFacts(AzureRMModuleBase):
         response = None
         results = {}
         try:
-            response = self.mgmt_client.servers.list_by_resource_group(resource_group_name=self.resource_group)
+            response = self.sql_client.servers.list_by_resource_group(resource_group_name=self.resource_group)
             self.log("Response : {0}".format(response))
         except CloudError as e:
             self.log('Could not get facts for Servers.')
@@ -199,6 +197,8 @@ class AzureRMServersFacts(AzureRMModuleBase):
 
 
 def main():
-    AzureRMServersFacts()
+    AzureRMSqlServerFacts()
+
+
 if __name__ == '__main__':
     main()

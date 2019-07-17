@@ -1,10 +1,13 @@
 """Sanity test using PSScriptAnalyzer."""
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import collections
 import json
 import os
 import re
+
+import lib.types as t
 
 from lib.sanity import (
     SanitySingleVersion,
@@ -16,8 +19,13 @@ from lib.sanity import (
 
 from lib.util import (
     SubprocessError,
-    run_command,
     find_executable,
+    read_lines_without_comments,
+)
+
+from lib.util_common import (
+    run_command,
+    INSTALL_ROOT,
 )
 
 from lib.config import (
@@ -41,30 +49,31 @@ class PslintTest(SanitySingleVersion):
         :type targets: SanityTargets
         :rtype: TestResult
         """
-        with open(PSLINT_SKIP_PATH, 'r') as skip_fd:
-            skip_paths = skip_fd.read().splitlines()
+        skip_paths = read_lines_without_comments(PSLINT_SKIP_PATH, optional=True)
 
         invalid_ignores = []
 
-        with open(PSLINT_IGNORE_PATH, 'r') as ignore_fd:
-            ignore_entries = ignore_fd.read().splitlines()
-            ignore = collections.defaultdict(dict)
-            line = 0
+        ignore_entries = read_lines_without_comments(PSLINT_IGNORE_PATH, optional=True)
+        ignore = collections.defaultdict(dict)  # type: t.Dict[str, t.Dict[str, int]]
+        line = 0
 
-            for ignore_entry in ignore_entries:
-                line += 1
+        for ignore_entry in ignore_entries:
+            line += 1
 
-                if ' ' not in ignore_entry:
-                    invalid_ignores.append((line, 'Invalid syntax'))
-                    continue
+            if not ignore_entry:
+                continue
 
-                path, code = ignore_entry.split(' ', 1)
+            if ' ' not in ignore_entry:
+                invalid_ignores.append((line, 'Invalid syntax'))
+                continue
 
-                if not os.path.exists(path):
-                    invalid_ignores.append((line, 'Remove "%s" since it does not exist' % path))
-                    continue
+            path, code = ignore_entry.split(' ', 1)
 
-                ignore[path][code] = line
+            if not os.path.exists(path):
+                invalid_ignores.append((line, 'Remove "%s" since it does not exist' % path))
+                continue
+
+            ignore[path][code] = line
 
         paths = sorted(i.path for i in targets.include if os.path.splitext(i.path)[1] in ('.ps1', '.psm1', '.psd1') and i.path not in skip_paths)
 
@@ -74,18 +83,25 @@ class PslintTest(SanitySingleVersion):
         if not find_executable('pwsh', required='warning'):
             return SanitySkipped(self.name)
 
-        cmd = ['test/sanity/pslint/pslint.ps1'] + paths
+        # Make sure requirements are installed before running sanity checks
+        cmds = [
+            [os.path.join(INSTALL_ROOT, 'test/runner/requirements/sanity.ps1')],
+            [os.path.join(INSTALL_ROOT, 'test/sanity/pslint/pslint.ps1')] + paths
+        ]
 
-        try:
-            stdout, stderr = run_command(args, cmd, capture=True)
-            status = 0
-        except SubprocessError as ex:
-            stdout = ex.stdout
-            stderr = ex.stderr
-            status = ex.status
+        stdout = ''
 
-        if stderr:
-            raise SubprocessError(cmd=cmd, status=status, stderr=stderr, stdout=stdout)
+        for cmd in cmds:
+            try:
+                stdout, stderr = run_command(args, cmd, capture=True)
+                status = 0
+            except SubprocessError as ex:
+                stdout = ex.stdout
+                stderr = ex.stderr
+                status = ex.status
+
+            if stderr:
+                raise SubprocessError(cmd=cmd, status=status, stderr=stderr, stdout=stdout)
 
         if args.explain:
             return SanitySuccess(self.name)
@@ -94,13 +110,15 @@ class PslintTest(SanitySingleVersion):
             'Information',
             'Warning',
             'Error',
+            'ParseError',
         ]
 
         cwd = os.getcwd() + '/'
 
-        # replace unicode smart quotes with ascii versions
+        # replace unicode smart quotes and ellipsis with ascii versions
         stdout = re.sub(u'[\u2018\u2019]', "'", stdout)
         stdout = re.sub(u'[\u201c\u201d]', '"', stdout)
+        stdout = re.sub(u'[\u2026]', '...', stdout)
 
         messages = json.loads(stdout)
 
@@ -119,7 +137,7 @@ class PslintTest(SanitySingleVersion):
 
         for error in errors:
             if error.code in ignore[error.path]:
-                ignore[error.path][error.code] = None  # error ignored, clear line number of ignore entry to track usage
+                ignore[error.path][error.code] = 0  # error ignored, clear line number of ignore entry to track usage
             else:
                 filtered.append(error)  # error not ignored
 
@@ -137,6 +155,9 @@ class PslintTest(SanitySingleVersion):
 
         for path in skip_paths:
             line += 1
+
+            if not path:
+                continue
 
             if not os.path.exists(path):
                 # Keep files out of the list which no longer exist in the repo.

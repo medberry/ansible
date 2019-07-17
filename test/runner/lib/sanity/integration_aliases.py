@@ -1,8 +1,13 @@
 """Sanity test to check integration test aliases."""
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import json
 import textwrap
+import re
+import os
+
+import lib.types as t
 
 from lib.sanity import (
     SanitySingleVersion,
@@ -28,9 +33,15 @@ from lib.cloud import (
     get_cloud_platforms,
 )
 
+from lib.util import (
+    display,
+)
+
 
 class IntegrationAliasesTest(SanitySingleVersion):
     """Sanity test to evaluate integration test aliases."""
+    SHIPPABLE_YML = 'shippable.yml'
+
     DISABLED = 'disabled/'
     UNSTABLE = 'unstable/'
     UNSUPPORTED = 'unsupported/'
@@ -69,6 +80,68 @@ class IntegrationAliasesTest(SanitySingleVersion):
     Consider adding integration tests before or alongside changes.
     """
 
+    def __init__(self):
+        super(IntegrationAliasesTest, self).__init__()
+
+        self._shippable_yml_lines = []  # type: t.List[str]
+        self._shippable_test_groups = {}  # type: t.Dict[str, t.Set[int]]
+
+    @property
+    def shippable_yml_lines(self):
+        """
+        :rtype: list[str]
+        """
+        if not self._shippable_yml_lines:
+            with open(self.SHIPPABLE_YML, 'r') as shippable_yml_fd:
+                self._shippable_yml_lines = shippable_yml_fd.read().splitlines()
+
+        return self._shippable_yml_lines
+
+    @property
+    def shippable_test_groups(self):
+        """
+        :rtype: dict[str, set[int]]
+        """
+        if not self._shippable_test_groups:
+            matches = [re.search(r'^[ #]+- env: T=(?P<group>[^/]+)/(?P<params>.+)/(?P<number>[1-9][0-9]?)$', line) for line in self.shippable_yml_lines]
+            entries = [(match.group('group'), int(match.group('number'))) for match in matches if match]
+
+            for key, value in entries:
+                if key not in self._shippable_test_groups:
+                    self._shippable_test_groups[key] = set()
+
+                self._shippable_test_groups[key].add(value)
+
+        return self._shippable_test_groups
+
+    def format_shippable_group_alias(self, name, fallback=''):
+        """
+        :type name: str
+        :type fallback: str
+        :rtype: str
+        """
+        group_numbers = self.shippable_test_groups.get(name, None)
+
+        if group_numbers:
+            if min(group_numbers) != 1:
+                display.warning('Min test group "%s" in shippable.yml is %d instead of 1.' % (name, min(group_numbers)), unique=True)
+
+            if max(group_numbers) != len(group_numbers):
+                display.warning('Max test group "%s" in shippable.yml is %d instead of %d.' % (name, max(group_numbers), len(group_numbers)), unique=True)
+
+            if max(group_numbers) > 9:
+                alias = 'shippable/%s/group(%s)/' % (name, '|'.join(str(i) for i in range(min(group_numbers), max(group_numbers) + 1)))
+            elif len(group_numbers) > 1:
+                alias = 'shippable/%s/group[%d-%d]/' % (name, min(group_numbers), max(group_numbers))
+            else:
+                alias = 'shippable/%s/group%d/' % (name, min(group_numbers))
+        elif fallback:
+            alias = 'shippable/%s/group%d/' % (fallback, 1)
+        else:
+            raise Exception('cannot find test group "%s" in shippable.yml' % name)
+
+        return alias
+
     def test(self, args, targets):
         """
         :type args: SanityConfig
@@ -77,6 +150,12 @@ class IntegrationAliasesTest(SanitySingleVersion):
         """
         if args.explain:
             return SanitySuccess(self.name)
+
+        if not os.path.isfile(self.SHIPPABLE_YML):
+            return SanityFailure(self.name, messages=[SanityMessage(
+                message='file missing',
+                path=self.SHIPPABLE_YML,
+            )])
 
         results = dict(
             comments=[],
@@ -123,13 +202,13 @@ class IntegrationAliasesTest(SanitySingleVersion):
 
         messages += self.check_ci_group(
             targets=tuple(filter_targets(posix_targets, ['cloud/'], include=False, directories=False, errors=False)),
-            find='posix/ci/group[1-3]/',
+            find=self.format_shippable_group_alias('linux').replace('linux', 'posix'),
         )
 
         for cloud in clouds:
             messages += self.check_ci_group(
                 targets=tuple(filter_targets(posix_targets, ['cloud/%s/' % cloud], include=True, directories=False, errors=False)),
-                find='posix/ci/cloud/group[1-5]/%s/' % cloud,
+                find=self.format_shippable_group_alias(cloud, 'cloud'),
             )
 
         return messages
@@ -144,7 +223,7 @@ class IntegrationAliasesTest(SanitySingleVersion):
 
         messages += self.check_ci_group(
             targets=windows_targets,
-            find='windows/ci/group[1-3]/',
+            find=self.format_shippable_group_alias('windows'),
         )
 
         return messages
@@ -155,9 +234,9 @@ class IntegrationAliasesTest(SanitySingleVersion):
         :type find: str
         :rtype: list[SanityMessage]
         """
-        all_paths = set(t.path for t in targets)
-        supported_paths = set(t.path for t in filter_targets(targets, [find], include=True, directories=False, errors=False))
-        unsupported_paths = set(t.path for t in filter_targets(targets, [self.UNSUPPORTED], include=True, directories=False, errors=False))
+        all_paths = set(target.path for target in targets)
+        supported_paths = set(target.path for target in filter_targets(targets, [find], include=True, directories=False, errors=False))
+        unsupported_paths = set(target.path for target in filter_targets(targets, [self.UNSUPPORTED], include=True, directories=False, errors=False))
 
         unassigned_paths = all_paths - supported_paths - unsupported_paths
         conflicting_paths = supported_paths & unsupported_paths
@@ -183,8 +262,8 @@ class IntegrationAliasesTest(SanitySingleVersion):
         integration_targets = list(walk_integration_targets())
         module_targets = list(walk_module_targets())
 
-        integration_targets_by_name = dict((t.name, t) for t in integration_targets)
-        module_names_by_path = dict((t.path, t.module) for t in module_targets)
+        integration_targets_by_name = dict((target.name, target) for target in integration_targets)
+        module_names_by_path = dict((target.path, target.module) for target in module_targets)
 
         disabled_targets = []
         unstable_targets = []

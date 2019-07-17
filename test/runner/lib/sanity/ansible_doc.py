@@ -1,5 +1,6 @@
 """Sanity test for ansible-doc."""
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import collections
 import os
@@ -16,6 +17,10 @@ from lib.sanity import (
 from lib.util import (
     SubprocessError,
     display,
+    read_lines_without_comments,
+)
+
+from lib.util_common import (
     intercept_command,
 )
 
@@ -37,23 +42,21 @@ class AnsibleDocTest(SanityMultipleVersion):
         :type python_version: str
         :rtype: TestResult
         """
-        with open('test/sanity/ansible-doc/skip.txt', 'r') as skip_fd:
-            skip_modules = set(skip_fd.read().splitlines())
+        skip_file = 'test/sanity/ansible-doc/skip.txt'
+        skip_modules = set(read_lines_without_comments(skip_file, remove_blank_lines=True, optional=True))
 
+        # This should use documentable plugins from constants instead
         plugin_type_blacklist = set([
             # not supported by ansible-doc
             'action',
-            'cliconf',
+            'doc_fragments',
             'filter',
-            'httpapi',
             'netconf',
             'terminal',
             'test',
         ])
 
-        modules = sorted(set(m for i in targets.include_external for m in i.modules) -
-                         set(m for i in targets.exclude_external for m in i.modules) -
-                         skip_modules)
+        modules = sorted(set(m for i in targets.include for m in i.modules) - skip_modules)
 
         plugins = [os.path.splitext(i.path)[0].split('/')[-2:] + [i.path] for i in targets.include if os.path.splitext(i.path)[1] == '.py' and
                    os.path.basename(i.path) != '__init__.py' and

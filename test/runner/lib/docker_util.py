@@ -1,21 +1,21 @@
 """Functions for accessing docker via the docker cli."""
-
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import json
 import os
 import time
 
-from lib.executor import (
-    SubprocessError,
-)
-
 from lib.util import (
     ApplicationError,
-    run_command,
     common_environment,
     display,
     find_executable,
+    SubprocessError,
+)
+
+from lib.util_common import (
+    run_command,
 )
 
 from lib.config import (
@@ -67,16 +67,31 @@ def get_docker_container_ip(args, container_id):
     return ipaddress
 
 
+def get_docker_networks(args, container_id):
+    """
+    :param args: EnvironmentConfig
+    :param container_id: str
+    :rtype: list[str]
+    """
+    results = docker_inspect(args, container_id)
+    networks = sorted(results[0]['NetworkSettings']['Networks'])
+    return networks
+
+
 def docker_pull(args, image):
     """
     :type args: EnvironmentConfig
     :type image: str
     """
+    if ('@' in image or ':' in image) and docker_images(args, image):
+        display.info('Skipping docker pull of existing image with tag or digest: %s' % image, verbosity=2)
+        return
+
     if not args.docker_pull:
         display.warning('Skipping docker pull for "%s". Image may be out-of-date.' % image)
         return
 
-    for _ in range(1, 10):
+    for _iteration in range(1, 10):
         try:
             docker_command(args, ['pull', image])
             return
@@ -127,7 +142,7 @@ def docker_run(args, image, options, cmd=None):
     if not cmd:
         cmd = []
 
-    for _ in range(1, 3):
+    for _iteration in range(1, 3):
         try:
             return docker_command(args, ['run'] + options + [image] + cmd, capture=True)
         except SubprocessError as ex:
@@ -136,6 +151,17 @@ def docker_run(args, image, options, cmd=None):
             time.sleep(3)
 
     raise ApplicationError('Failed to run docker image "%s".' % image)
+
+
+def docker_images(args, image):
+    """
+    :param args: CommonConfig
+    :param image: str
+    :rtype: list[dict[str, any]]
+    """
+    stdout, _dummy = docker_command(args, ['images', image, '--format', '{{json .}}'], capture=True, always=True)
+    results = [json.loads(line) for line in stdout.splitlines()]
+    return results
 
 
 def docker_rm(args, container_id):
@@ -156,13 +182,22 @@ def docker_inspect(args, container_id):
         return []
 
     try:
-        stdout, _ = docker_command(args, ['inspect', container_id], capture=True)
+        stdout = docker_command(args, ['inspect', container_id], capture=True)[0]
         return json.loads(stdout)
     except SubprocessError as ex:
         try:
             return json.loads(ex.stdout)
-        except:
-            raise ex  # pylint: disable=locally-disabled, raising-bad-type
+        except Exception:
+            raise ex
+
+
+def docker_network_disconnect(args, container_id, network):
+    """
+    :param args: EnvironmentConfig
+    :param container_id: str
+    :param network: str
+    """
+    docker_command(args, ['network', 'disconnect', network, container_id], capture=True)
 
 
 def docker_network_inspect(args, network):
@@ -175,13 +210,13 @@ def docker_network_inspect(args, network):
         return []
 
     try:
-        stdout, _ = docker_command(args, ['network', 'inspect', network], capture=True)
+        stdout = docker_command(args, ['network', 'inspect', network], capture=True)[0]
         return json.loads(stdout)
     except SubprocessError as ex:
         try:
             return json.loads(ex.stdout)
-        except:
-            raise ex  # pylint: disable=locally-disabled, raising-bad-type
+        except Exception:
+            raise ex
 
 
 def docker_exec(args, container_id, cmd, options=None, capture=False, stdin=None, stdout=None):
@@ -191,8 +226,8 @@ def docker_exec(args, container_id, cmd, options=None, capture=False, stdin=None
     :type cmd: list[str]
     :type options: list[str] | None
     :type capture: bool
-    :type stdin: file | None
-    :type stdout: file | None
+    :type stdin: BinaryIO | None
+    :type stdout: BinaryIO | None
     :rtype: str | None, str | None
     """
     if not options:
@@ -201,17 +236,36 @@ def docker_exec(args, container_id, cmd, options=None, capture=False, stdin=None
     return docker_command(args, ['exec'] + options + [container_id] + cmd, capture=capture, stdin=stdin, stdout=stdout)
 
 
-def docker_command(args, cmd, capture=False, stdin=None, stdout=None):
+def docker_info(args):
     """
-    :type args: EnvironmentConfig
+    :param args: CommonConfig
+    :rtype: dict[str, any]
+    """
+    stdout, _dummy = docker_command(args, ['info', '--format', '{{json .}}'], capture=True, always=True)
+    return json.loads(stdout)
+
+
+def docker_version(args):
+    """
+    :param args: CommonConfig
+    :rtype: dict[str, any]
+    """
+    stdout, _dummy = docker_command(args, ['version', '--format', '{{json .}}'], capture=True, always=True)
+    return json.loads(stdout)
+
+
+def docker_command(args, cmd, capture=False, stdin=None, stdout=None, always=False):
+    """
+    :type args: CommonConfig
     :type cmd: list[str]
     :type capture: bool
     :type stdin: file | None
     :type stdout: file | None
+    :type always: bool
     :rtype: str | None, str | None
     """
     env = docker_environment()
-    return run_command(args, ['docker'] + cmd, env=env, capture=capture, stdin=stdin, stdout=stdout)
+    return run_command(args, ['docker'] + cmd, env=env, capture=capture, stdin=stdin, stdout=stdout, always=always)
 
 
 def docker_environment():

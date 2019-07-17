@@ -32,26 +32,25 @@ requirements:
 - python >= 2.6
 - PyVmomi
 - vSphere Automation SDK
-- vCloud Suite SDK
 extends_documentation_fragment: vmware_rest_client.documentation
 '''
 
 EXAMPLES = r'''
 - name: Get facts about tag
   vmware_tag_facts:
-    hostname: 10.65.223.91
-    username: administrator@vsphere.local
-    password: Esxi@123$
-    validate_certs: False
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+  delegate_to: localhost
 
 - name: Get category id from the given tag
   vmware_tag_facts:
-    hostname: 10.65.223.91
-    username: administrator@vsphere.local
-    password: Esxi@123$
-    validate_certs: False
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    validate_certs: no
+  delegate_to: localhost
   register: tag_details
-
 - debug:
     msg: "{{ tag_details.tag_facts['fedora_machines']['tag_category_id'] }}"
 
@@ -86,17 +85,13 @@ results:
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.vmware_rest_client import VmwareRestClient
-try:
-    from com.vmware.cis.tagging_client import Tag
-except ImportError:
-    pass
 
 
 class VmTagFactManager(VmwareRestClient):
     def __init__(self, module):
         """Constructor."""
         super(VmTagFactManager, self).__init__(module)
-        self.tag_service = Tag(self.connect)
+        self.tag_service = self.api_client.tagging.Tag
         self.global_tags = dict()
 
     def get_all_tags(self):

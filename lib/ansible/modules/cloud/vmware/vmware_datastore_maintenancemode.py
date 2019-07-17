@@ -58,35 +58,39 @@ extends_documentation_fragment: vmware.documentation
 EXAMPLES = '''
 - name: Enter datastore into Maintenance Mode
   vmware_datastore_maintenancemode:
-    hostname: vc_host
-    username: vc_user
-    password: vc_pass
-    datastore: datastore1
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    datastore: '{{ datastore_name }}'
     state: present
+  delegate_to: localhost
 
 - name: Enter all datastores under cluster into Maintenance Mode
   vmware_datastore_maintenancemode:
-    hostname: vc_host
-    username: vc_user
-    password: vc_pass
-    cluster_name: DC0_C0
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    cluster_name: '{{ cluster_name }}'
     state: present
+  delegate_to: localhost
 
 - name: Enter all datastores under datastore cluster into Maintenance Mode
   vmware_datastore_maintenancemode:
-    hostname: vc_host
-    username: vc_user
-    password: vc_pass
-    datastore_cluster: DSC_POD0
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    datastore_cluster: '{{ datastore_cluster_name }}'
     state: present
+  delegate_to: localhost
 
 - name: Exit datastore into Maintenance Mode
   vmware_datastore_maintenancemode:
-    hostname: vc_host
-    username: vc_user
-    password: vc_pass
-    datastore: datastore1
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    datastore: '{{ datastore_name }}'
     state: absent
+  delegate_to: localhost
 '''
 
 RETURN = '''
@@ -116,7 +120,10 @@ class VmwareDatastoreMaintenanceMgr(PyVmomi):
         datastore_cluster = self.params.get('datastore_cluster')
         self.datastore_objs = []
         if datastore_name:
-            self.datastore_objs = [self.find_datastore_by_name(datastore_name=datastore_name)]
+            ds = self.find_datastore_by_name(datastore_name=datastore_name)
+            if not ds:
+                self.module.fail_json(msg='Failed to find datastore "%(datastore)s".' % self.params)
+            self.datastore_objs = [ds]
         elif cluster_name:
             cluster = find_cluster_by_name(self.content, cluster_name)
             if not cluster:

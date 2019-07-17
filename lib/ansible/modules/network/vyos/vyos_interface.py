@@ -46,6 +46,7 @@ options:
   enabled:
     description:
       - Interface link status.
+    type: bool
   speed:
     description:
       - Interface link speed.
@@ -203,6 +204,8 @@ def map_obj_to_commands(updates):
                     value = w.get(item)
 
                     if value and value != obj_in_have.get(item):
+                        if item == 'description':
+                            value = "\'" + str(value) + "\'"
                         commands.append(set_interface + ' ' + item + ' ' + str(value))
 
                 if disable and not obj_in_have.get('disable', False):
@@ -214,6 +217,8 @@ def map_obj_to_commands(updates):
                 for item in params:
                     value = w.get(item)
                     if value:
+                        if item == 'description':
+                            value = "\'" + str(value) + "\'"
                         commands.append(set_interface + ' ' + item + ' ' + str(value))
 
                 if disable:
@@ -222,7 +227,7 @@ def map_obj_to_commands(updates):
 
 
 def map_config_to_obj(module):
-    data = get_config(module)
+    data = get_config(module, flags=['| grep interface'])
     obj = []
     for line in data.split('\n'):
         if line.startswith('set interfaces ethernet'):
@@ -243,7 +248,7 @@ def map_config_to_obj(module):
                 if match:
                     param = match.group(1)
                     if param == 'description':
-                        match = re.search(r'description (\S+)', line, re.M)
+                        match = re.search(r'description (.+)', line, re.M)
                         description = match.group(1).strip("'")
                         interface['description'] = description
                     elif param == 'speed':
@@ -393,7 +398,7 @@ def main():
     required_one_of = [['name', 'aggregate']]
     mutually_exclusive = [['name', 'aggregate']]
 
-    required_together = (['speed', 'duplex'])
+    required_together = [['speed', 'duplex']]
     module = AnsibleModule(argument_spec=argument_spec,
                            required_one_of=required_one_of,
                            mutually_exclusive=mutually_exclusive,
@@ -427,6 +432,7 @@ def main():
         msg = 'One or more conditional statements have not been satisfied'
         module.fail_json(msg=msg, failed_conditions=failed_conditions)
     module.exit_json(**result)
+
 
 if __name__ == '__main__':
     main()

@@ -12,18 +12,28 @@
       lines:
         - install feature-set fabricpath
         - feature-set fabricpath
+      provider: "{{ connection }}"
     when: platform is search('N5K|N7K')
 
   - name: "Enable feature vn segment"
-    nxos_config: 
+    nxos_config:
       commands:
         - feature vn-segment-vlan-based
       match: none
+      provider: "{{ connection }}"
     when: platform is search('N9K')
+
+  - name: vlan teardown
+    nxos_vlan: &vlan_teardown
+      vlan_range: "2-200"
+      provider: "{{ connection }}"
+      state: absent
+    ignore_errors: yes
 
   - name: Ensure a range of VLANs are present on the switch
     nxos_vlan: &conf_vlan
       vlan_range: "2-10,20,50,55-60,100-150"
+      provider: "{{ connection }}"
     register: result
 
   - assert: &true
@@ -45,6 +55,7 @@
       admin_state: down
       name: WEB
       mapped_vni: 5555
+      provider: "{{ connection }}"
     register: result
     when: platform is search('N9K')
 
@@ -66,6 +77,7 @@
       admin_state: up
       name: default
       mapped_vni: default
+      provider: "{{ connection }}"
     register: result
     when: platform is search('N9K')
 
@@ -86,6 +98,7 @@
       vlan_state: suspend
       admin_state: down
       name: WEB
+      provider: "{{ connection }}"
     register: result
     when: platform is search('N3K|N7K')
 
@@ -106,6 +119,7 @@
       vlan_state: active
       admin_state: up
       name: default
+      provider: "{{ connection }}"
     register: result
     when: platform is search('N3K|N7K')
 
@@ -120,11 +134,11 @@
   - assert: *false
     when: platform is search('N3K|N7K')
 
-# Uncomment this once the get_capabilities() work on nxapi as well
   - name: Change mode
     nxos_vlan: &mode1
       vlan_id: 50
       mode: fabricpath
+      provider: "{{ connection }}"
     register: result
     when: platform is search('N5K|N7K')
 
@@ -143,6 +157,7 @@
     nxos_vlan: &mode2
       vlan_id: 50
       mode: ce
+      provider: "{{ connection }}"
     register: result
     when: platform is search('N5K|N7K')
 
@@ -160,6 +175,7 @@
   - name: Ensure VLAN is NOT on the device
     nxos_vlan: &no_vlan
       vlan_id: 50
+      provider: "{{ connection }}"
       state: absent
     register: result
 
@@ -178,6 +194,7 @@
       interfaces:
         - "{{ testint1 }}"
         - "{{ testint2 }}"
+      provider: "{{ connection }}"
     register: result
 
   - assert: *true
@@ -192,6 +209,7 @@
     nxos_vlan: &remint
       vlan_id: 101
       interfaces: default
+      provider: "{{ connection }}"
     register: result
 
   - assert: *true
@@ -207,15 +225,14 @@
       nxos_vlan: *remint
       ignore_errors: yes
 
-    - name: remove vlans
-      nxos_vlan:
-        vlan_range: "2-10,20,50,55-60,100-150"
-        state: absent
+    - name: vlan teardown final
+      nxos_vlan: *vlan_teardown
       ignore_errors: yes
 
     - name: "Disable feature vn segement"
-      nxos_feature: 
+      nxos_feature:
         feature: vn-segment-vlan-based
+        provider: "{{ connection }}"
         state: disabled
       ignore_errors: yes
       when: platform is search('N9K')

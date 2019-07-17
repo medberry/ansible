@@ -1,6 +1,6 @@
 """Python native TGZ creation."""
-
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import abc
 import tarfile
@@ -9,6 +9,10 @@ import os
 from lib.util import (
     display,
     ABC,
+)
+
+from lib.constants import (
+    TIMEOUT_PATH,
 )
 
 # improve performance by disabling uid/gid lookups
@@ -24,7 +28,6 @@ class TarFilter(ABC):
         :type item: tarfile.TarInfo
         :rtype: tarfile.TarInfo | None
         """
-        pass
 
 
 class DefaultTarFilter(TarFilter):
@@ -37,6 +40,7 @@ class DefaultTarFilter(TarFilter):
             '.tox',
             '.git',
             '.idea',
+            '.pytest_cache',
             '__pycache__',
             'ansible.egg-info',
         )
@@ -44,6 +48,7 @@ class DefaultTarFilter(TarFilter):
         self.ignore_files = (
             '.gitignore',
             '.gitdir',
+            TIMEOUT_PATH,
         )
 
         self.ignore_extensions = (
@@ -57,7 +62,7 @@ class DefaultTarFilter(TarFilter):
         :rtype: tarfile.TarInfo | None
         """
         filename = os.path.basename(item.path)
-        name, ext = os.path.splitext(filename)
+        ext = os.path.splitext(filename)[1]
         dirs = os.path.split(item.path)
 
         if not item.isdir():
@@ -67,7 +72,7 @@ class DefaultTarFilter(TarFilter):
             if item.path.startswith('./docs/docsite/_build/'):
                 return None
 
-        if name in self.ignore_files:
+        if filename in self.ignore_files:
             return None
 
         if ext in self.ignore_extensions:

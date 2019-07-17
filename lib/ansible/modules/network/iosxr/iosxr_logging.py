@@ -711,8 +711,9 @@ def main():
 
     config_object = None
     if is_cliconf(module):
-        module.deprecate(msg="cli support for 'iosxr_logging' is deprecated. Use transport netconf instead",
-                         version="4 releases from v2.5")
+        # Commenting the below cliconf deprecation support call for Ansible 2.9 as it'll be continued to be supported
+        # module.deprecate("cli support for 'iosxr_interface' is deprecated. Use transport netconf instead",
+        #                  version='2.9')
         config_object = CliConfiguration(module)
     elif is_netconf(module):
         config_object = NCConfiguration(module)
@@ -720,6 +721,7 @@ def main():
     if config_object:
         result = config_object.run()
     module.exit_json(**result)
+
 
 if __name__ == '__main__':
     main()

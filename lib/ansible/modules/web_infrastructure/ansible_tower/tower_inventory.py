@@ -67,11 +67,11 @@ EXAMPLES = '''
 '''
 
 
-from ansible.module_utils.ansible_tower import tower_argument_spec, tower_auth_config, tower_check_mode, HAS_TOWER_CLI
+from ansible.module_utils.ansible_tower import TowerModule, tower_auth_config, tower_check_mode
 
 try:
     import tower_cli
-    import tower_cli.utils.exceptions as exc
+    import tower_cli.exceptions as exc
 
     from tower_cli.conf import settings
 except ImportError:
@@ -79,8 +79,7 @@ except ImportError:
 
 
 def main():
-    argument_spec = tower_argument_spec()
-    argument_spec.update(dict(
+    argument_spec = dict(
         name=dict(required=True),
         description=dict(),
         organization=dict(required=True),
@@ -88,12 +87,9 @@ def main():
         kind=dict(choices=['', 'smart'], default=''),
         host_filter=dict(),
         state=dict(choices=['present', 'absent'], default='present'),
-    ))
+    )
 
-    module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
-
-    if not HAS_TOWER_CLI:
-        module.fail_json(msg='ansible-tower-cli required for this module')
+    module = TowerModule(argument_spec=argument_spec, supports_check_mode=True)
 
     name = module.params.get('name')
     description = module.params.get('description')
@@ -123,13 +119,12 @@ def main():
                 result = inventory.delete(name=name, organization=org['id'])
         except (exc.NotFound) as excinfo:
             module.fail_json(msg='Failed to update inventory, organization not found: {0}'.format(excinfo), changed=False)
-        except (exc.ConnectionError, exc.BadRequest) as excinfo:
+        except (exc.ConnectionError, exc.BadRequest, exc.AuthError) as excinfo:
             module.fail_json(msg='Failed to update inventory: {0}'.format(excinfo), changed=False)
 
     json_output['changed'] = result['changed']
     module.exit_json(**json_output)
 
 
-from ansible.module_utils.basic import AnsibleModule
 if __name__ == '__main__':
     main()

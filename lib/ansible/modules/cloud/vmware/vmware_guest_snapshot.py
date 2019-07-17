@@ -52,8 +52,14 @@ options:
      choices: ['first', 'last']
    uuid:
      description:
-     - UUID of the instance to manage if known, this is VMware's unique identifier.
-     - This is required parameter, if C(name) is not supplied.
+     - UUID of the instance to manage if known, this is VMware's BIOS UUID by default.
+     - This is required if C(name) parameter is not supplied.
+   use_instance_uuid:
+     description:
+     - Whether to use the VMware instance UUID rather than the BIOS UUID.
+     default: no
+     type: bool
+     version_added: '2.8'
    folder:
      description:
      - Destination folder, absolute or relative path to find an existing guest.
@@ -86,7 +92,7 @@ options:
    quiesce:
      description:
      - If set to C(true) and virtual machine is powered on, it will quiesce the file system in virtual machine.
-     - Note that VMWare Tools are required for this flag.
+     - Note that VMware Tools are required for this flag.
      - If virtual machine is powered off or VMware Tools are not available, then this flag is set to C(false).
      - If virtual machine does not provide capability to take quiesce snapshot, then this flag is set to C(false).
      required: False
@@ -123,12 +129,12 @@ extends_documentation_fragment: vmware.documentation
 EXAMPLES = '''
   - name: Create a snapshot
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      datacenter: datacenter_name
-      folder: /myfolder
-      name: dummy_vm
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: present
       snapshot_name: snap1
       description: snap1_description
@@ -136,86 +142,115 @@ EXAMPLES = '''
 
   - name: Remove a snapshot
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      name: dummy_vm
-      datacenter: datacenter_name
-      folder: /myfolder
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: absent
       snapshot_name: snap1
     delegate_to: localhost
 
   - name: Revert to a snapshot
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      datacenter: datacenter_name
-      folder: /myfolder
-      name: dummy_vm
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: revert
       snapshot_name: snap1
     delegate_to: localhost
 
   - name: Remove all snapshots of a VM
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      datacenter: datacenter_name
-      folder: /myfolder
-      name: dummy_vm
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: remove_all
     delegate_to: localhost
 
   - name: Take snapshot of a VM using quiesce and memory flag on
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      name: dummy_vm
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: present
       snapshot_name: dummy_vm_snap_0001
-      quiesce: True
-      memory_dump: True
+      quiesce: yes
+      memory_dump: yes
     delegate_to: localhost
 
   - name: Remove a snapshot and snapshot subtree
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      name: dummy_vm
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: absent
-      remove_children: True
+      remove_children: yes
       snapshot_name: snap1
     delegate_to: localhost
 
   - name: Rename a snapshot
     vmware_guest_snapshot:
-      hostname: 192.168.1.209
-      username: administrator@vsphere.local
-      password: vmware
-      name: dummy_vm
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ datacenter_name }}"
+      folder: "/{{ datacenter_name }}/vm/"
+      name: "{{ guest_name }}"
       state: present
       snapshot_name: current_snap_name
       new_snapshot_name: im_renamed
-      new_description: "renamed snapshot today"
+      new_description: "{{ new_snapshot_description }}"
     delegate_to: localhost
 '''
 
 RETURN = """
-instance:
-    description: metadata about the new virtual machine snapshot
+snapshot_results:
+    description: metadata about the virtual machine snapshots
     returned: always
     type: dict
-    sample: None
+    sample: {
+      "current_snapshot": {
+          "creation_time": "2019-04-09T14:40:26.617427+00:00",
+          "description": "Snapshot 4 example",
+          "id": 4,
+          "name": "snapshot4",
+          "state": "poweredOff"
+      },
+      "snapshots": [
+          {
+              "creation_time": "2019-04-09T14:38:24.667543+00:00",
+              "description": "Snapshot 3 example",
+              "id": 3,
+              "name": "snapshot3",
+              "state": "poweredOff"
+          },
+          {
+              "creation_time": "2019-04-09T14:40:26.617427+00:00",
+              "description": "Snapshot 4 example",
+              "id": 4,
+              "name": "snapshot4",
+              "state": "poweredOff"
+          }
+      ]
+    }
 """
 
 import time
 try:
-    import pyVmomi
     from pyVmomi import vim
 except ImportError:
     pass
@@ -350,7 +385,7 @@ class PyVmomiHelper(PyVmomi):
             if task.info.state == 'error':
                 result = {'changed': False, 'failed': True, 'msg': task.info.error.msg}
             else:
-                result = {'changed': True, 'failed': False, 'results': list_snapshots(vm)}
+                result = {'changed': True, 'failed': False, 'snapshot_results': list_snapshots(vm)}
 
         return result
 
@@ -362,6 +397,7 @@ def main():
         name=dict(type='str'),
         name_match=dict(type='str', choices=['first', 'last'], default='first'),
         uuid=dict(type='str'),
+        use_instance_uuid=dict(type='bool', default=False),
         folder=dict(type='str'),
         datacenter=dict(required=True, type='str'),
         snapshot_name=dict(type='str'),

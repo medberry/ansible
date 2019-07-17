@@ -1,8 +1,8 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 #
-# (C) 2017 Red Hat Inc.
-# Copyright (C) 2017 Lenovo.
+# (C) 2019 Red Hat Inc.
+# Copyright (C) 2019 Lenovo.
 #
 # GNU General Public License v3.0+
 #
@@ -36,7 +36,7 @@ description:
     module will always collect a base set of facts from the device
     and can enable or disable collection of additional facts.
 notes:
-  - Tested against CNOS 10.8.0.42
+  - Tested against CNOS 10.8.1
 options:
   authorize:
     version_added: "2.6"
@@ -55,46 +55,6 @@ options:
         on the remote device.  If I(authorize) is false, then this argument
         does nothing. If the value is not specified in the task, the value of
         environment variable C(ANSIBLE_NET_AUTH_PASS) will be used instead.
-  provider:
-    version_added: "2.6"
-    description:
-      - A dict object containing connection details.
-    suboptions:
-      host:
-        description:
-          - Specifies the DNS host name or address for connecting to the remote
-            device over the specified transport.  The value of host is used as
-            the destination address for the transport.
-        required: true
-      port:
-        description:
-          - Specifies the port to use when building the connection to the remote device.
-        default: 22
-      username:
-        description:
-          - Configures the username to use to authenticate the connection to
-            the remote device.  This value is used to authenticate
-            the SSH session. If the value is not specified in the task, the
-            value of environment variable C(ANSIBLE_NET_USERNAME) will be used instead.
-      password:
-        description:
-          - Specifies the password to use to authenticate the connection to
-            the remote device.   This value is used to authenticate
-            the SSH session. If the value is not specified in the task, the
-            value of environment variable C(ANSIBLE_NET_PASSWORD) will be used instead.
-      timeout:
-        description:
-          - Specifies the timeout in seconds for communicating with the network device
-            for either connecting or sending commands.  If the timeout is
-            exceeded before the operation is completed, the module will error.
-        default: 10
-      ssh_keyfile:
-        description:
-          - Specifies the SSH key to use to authenticate the connection to
-            the remote device.   This value is the path to the
-            key used to authenticate the SSH session. If the value is not specified
-            in the task, the value of environment variable C(ANSIBLE_NET_SSH_KEYFILE)
-            will be used instead.
   gather_subset:
     version_added: "2.6"
     description:
@@ -112,36 +72,21 @@ Tasks: The following are examples of using the module cnos_facts.
 ---
 - name: Test cnos Facts
   cnos_facts:
-    provider={{ cli }}
-
-  vars:
-    cli:
-      host: "{{ inventory_hostname }}"
-      port: 22
-      username: admin
-      password: admin
-      transport: cli
-      timeout: 30
-      authorize: True
-      auth_pass:
 
 ---
 # Collect all facts from the device
 - cnos_facts:
     gather_subset: all
-    provider: "{{ cli }}"
 
 # Collect only the config and default facts
 - cnos_facts:
     gather_subset:
       - config
-    provider: "{{ cli }}"
 
 # Do not collect hardware facts
 - cnos_facts:
     gather_subset:
       - "!hardware"
-    provider: "{{ cli }}"
 '''
 RETURN = '''
   ansible_net_gather_subset:
@@ -164,11 +109,11 @@ RETURN = '''
   ansible_net_hostname:
     description: The configured hostname of the device
     returned: always
-    type: string
+    type: str
   ansible_net_image:
     description: Indicates the active image for the device
     returned: always
-    type: string
+    type: str
 # hardware
   ansible_net_memfree_mb:
     description: The available free memory on the remote device in MB
@@ -203,7 +148,6 @@ RETURN = '''
 import re
 
 from ansible.module_utils.network.cnos.cnos import run_commands
-from ansible.module_utils.network.cnos.cnos import cnos_argument_spec
 from ansible.module_utils.network.cnos.cnos import check_args
 from ansible.module_utils._text import to_text
 from ansible.module_utils.basic import AnsibleModule
@@ -231,7 +175,7 @@ class FactsBase(object):
 
 class Default(FactsBase):
 
-    COMMANDS = ['display sys-info', 'display running-config']
+    COMMANDS = ['show sys-info', 'show running-config']
 
     def populate(self):
         super(Default, self).populate()
@@ -297,12 +241,12 @@ class Default(FactsBase):
 class Hardware(FactsBase):
 
     COMMANDS = [
-        'display running-config'
+        'show running-config'
     ]
 
     def populate(self):
         super(Hardware, self).populate()
-        data = self.run(['display process memory'])
+        data = self.run(['show process memory'])
         data = to_text(data, errors='surrogate_or_strict').strip()
         data = data.replace(r"\n", "\n")
         if data:
@@ -331,7 +275,7 @@ class Hardware(FactsBase):
 
 class Config(FactsBase):
 
-    COMMANDS = ['display running-config']
+    COMMANDS = ['show running-config']
 
     def populate(self):
         super(Config, self).populate()
@@ -342,7 +286,7 @@ class Config(FactsBase):
 
 class Interfaces(FactsBase):
 
-    COMMANDS = ['display interface brief']
+    COMMANDS = ['show interface brief']
 
     def populate(self):
         super(Interfaces, self).populate()
@@ -350,10 +294,10 @@ class Interfaces(FactsBase):
         self.facts['all_ipv4_addresses'] = list()
         self.facts['all_ipv6_addresses'] = list()
 
-        data1 = self.run(['display interface status'])
+        data1 = self.run(['show interface status'])
         data1 = to_text(data1, errors='surrogate_or_strict').strip()
         data1 = data1.replace(r"\n", "\n")
-        data2 = self.run(['display interface mac-address'])
+        data2 = self.run(['show interface mac-address'])
         data2 = to_text(data2, errors='surrogate_or_strict').strip()
         data2 = data2.replace(r"\n", "\n")
         lines1 = None
@@ -364,7 +308,7 @@ class Interfaces(FactsBase):
             lines2 = self.parse_interfaces(data2)
         if lines1 is not None and lines2 is not None:
             self.facts['interfaces'] = self.populate_interfaces(lines1, lines2)
-        data3 = self.run(['display lldp neighbors'])
+        data3 = self.run(['show lldp neighbors'])
         data3 = to_text(data3, errors='surrogate_or_strict').strip()
         data3 = data3.replace(r"\n", "\n")
         if data3:
@@ -372,9 +316,9 @@ class Interfaces(FactsBase):
         if lines3 is not None:
             self.facts['neighbors'] = self.populate_neighbors(lines3)
 
-        data4 = self.run(['display ip interface brief vrf all'])
-        data5 = self.run(['display ipv6 interface brief vrf all'])
-        data4 = to_text(data4, errors='surrogate_or_stdisplay').strip()
+        data4 = self.run(['show ip interface brief vrf all'])
+        data5 = self.run(['show ipv6 interface brief vrf all'])
+        data4 = to_text(data4, errors='surrogate_or_strict').strip()
         data4 = data4.replace(r"\n", "\n")
         data5 = to_text(data5, errors='surrogate_or_strict').strip()
         data5 = data5.replace(r"\n", "\n")
@@ -448,10 +392,6 @@ class Interfaces(FactsBase):
                 if match:
                     key = match.group(1)
                     parsed.append(line)
-                # match = re.match(r'^(loopback+)', line)
-                # if match:
-                #    key = match.group(1)
-                #    parsed.append(line)
         return parsed
 
     def set_ip_interfaces(self, line4):
@@ -484,14 +424,24 @@ class Interfaces(FactsBase):
 
     def populate_neighbors(self, lines3):
         neighbors = dict()
+        device_name = ''
         for line in lines3:
             neighborSplit = line.split()
             innerData = dict()
-            innerData['Local Interface'] = neighborSplit[1].strip()
-            innerData['Hold Time'] = neighborSplit[2].strip()
-            innerData['Capability'] = neighborSplit[3].strip()
-            innerData['Remote Port'] = neighborSplit[4].strip()
-            neighbors[neighborSplit[0].strip()] = innerData
+            count = len(neighborSplit)
+            if count == 5:
+                local_interface = neighborSplit[1].strip()
+                innerData['Device Name'] = neighborSplit[0].strip()
+                innerData['Hold Time'] = neighborSplit[2].strip()
+                innerData['Capability'] = neighborSplit[3].strip()
+                innerData['Remote Port'] = neighborSplit[4].strip()
+                neighbors[local_interface] = innerData
+            elif count == 4:
+                local_interface = neighborSplit[0].strip()
+                innerData['Hold Time'] = neighborSplit[1].strip()
+                innerData['Capability'] = neighborSplit[2].strip()
+                innerData['Remote Port'] = neighborSplit[3].strip()
+                neighbors[local_interface] = innerData
         return neighbors
 
     def parse_neighbors(self, neighbors):
@@ -511,6 +461,7 @@ class Interfaces(FactsBase):
                     parsed.append(line)
         return parsed
 
+
 FACT_SUBSETS = dict(
     default=Default,
     hardware=Hardware,
@@ -529,8 +480,6 @@ def main():
     argument_spec = dict(
         gather_subset=dict(default=['!config'], type='list')
     )
-
-    argument_spec.update(cnos_argument_spec)
 
     module = AnsibleModule(argument_spec=argument_spec,
                            supports_check_mode=True)

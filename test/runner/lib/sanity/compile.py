@@ -1,8 +1,8 @@
 """Sanity test for proper python syntax."""
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import os
-import re
 
 from lib.sanity import (
     SanityMultipleVersion,
@@ -14,9 +14,15 @@ from lib.sanity import (
 
 from lib.util import (
     SubprocessError,
-    run_command,
     display,
     find_python,
+    read_lines_without_comments,
+    parse_to_list_of_dict,
+    INSTALL_ROOT,
+)
+
+from lib.util_common import (
+    run_command,
 )
 
 from lib.config import (
@@ -37,12 +43,10 @@ class CompileTest(SanityMultipleVersion):
         :type python_version: str
         :rtype: TestResult
         """
-        # optional list of regex patterns to exclude from tests
         skip_file = 'test/sanity/compile/python%s-skip.txt' % python_version
 
         if os.path.exists(skip_file):
-            with open(skip_file, 'r') as skip_fd:
-                skip_paths = skip_fd.read().splitlines()
+            skip_paths = read_lines_without_comments(skip_file)
         else:
             skip_paths = []
 
@@ -51,7 +55,7 @@ class CompileTest(SanityMultipleVersion):
         if not paths:
             return SanitySkipped(self.name, python_version=python_version)
 
-        cmd = [find_python(python_version), 'test/sanity/compile/compile.py']
+        cmd = [find_python(python_version), os.path.join(INSTALL_ROOT, 'test/sanity/compile/compile.py')]
 
         data = '\n'.join(paths)
 
@@ -73,7 +77,7 @@ class CompileTest(SanityMultipleVersion):
 
         pattern = r'^(?P<path>[^:]*):(?P<line>[0-9]+):(?P<column>[0-9]+): (?P<message>.*)$'
 
-        results = [re.search(pattern, line).groupdict() for line in stdout.splitlines()]
+        results = parse_to_list_of_dict(pattern, stdout)
 
         results = [SanityMessage(
             message=r['message'],
@@ -86,6 +90,9 @@ class CompileTest(SanityMultipleVersion):
 
         for path in skip_paths:
             line += 1
+
+            if not path:
+                continue
 
             if not os.path.exists(path):
                 # Keep files out of the list which no longer exist in the repo.

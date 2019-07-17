@@ -18,59 +18,87 @@
 # ----------------------------------------------------------------------------
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 ################################################################################
 # Documentation
 ################################################################################
 
-ANSIBLE_METADATA = {'metadata_version': '1.1',
-                    'status': ["preview"],
-                    'supported_by': 'community'}
+ANSIBLE_METADATA = {'metadata_version': '1.1', 'status': ["preview"], 'supported_by': 'community'}
 
 DOCUMENTATION = '''
 ---
 module: gcp_pubsub_topic
 description:
-    - A named resource to which messages are sent by publishers.
+- A named resource to which messages are sent by publishers.
 short_description: Creates a GCP Topic
 version_added: 2.6
 author: Google Inc. (@googlecloudplatform)
 requirements:
-    - python >= 2.6
-    - requests >= 2.18.4
-    - google-auth >= 1.3.0
+- python >= 2.6
+- requests >= 2.18.4
+- google-auth >= 1.3.0
 options:
-    state:
-        description:
-            - Whether the given object should exist in GCP
-        choices: ['present', 'absent']
-        default: 'present'
-    name:
-        description:
-            - Name of the topic.
-        required: false
+  state:
+    description:
+    - Whether the given object should exist in GCP
+    choices:
+    - present
+    - absent
+    default: present
+  name:
+    description:
+    - Name of the topic.
+    required: true
+  kms_key_name:
+    description:
+    - The resource name of the Cloud KMS CryptoKey to be used to protect access to
+      messsages published on this topic. Your project's PubSub service account (`service-{{PROJECT_NUMBER}}@gcp-sa-pubsub.iam.gserviceaccount.com`)
+      must have `roles/cloudkms.cryptoKeyEncrypterDecrypter` to use this feature.
+    - The expected format is `projects/*/locations/*/keyRings/*/cryptoKeys/*` .
+    required: false
+    version_added: 2.9
+  labels:
+    description:
+    - A set of key/value label pairs to assign to this Topic.
+    required: false
+    version_added: 2.8
 extends_documentation_fragment: gcp
+notes:
+- 'API Reference: U(https://cloud.google.com/pubsub/docs/reference/rest/v1/projects.topics)'
+- 'Managing Topics: U(https://cloud.google.com/pubsub/docs/admin#managing_topics)'
 '''
 
 EXAMPLES = '''
 - name: create a topic
   gcp_pubsub_topic:
-      name: 'test-topic1'
-      project: testProject
-      auth_kind: service_account
-      service_account_file: /tmp/auth.pem
-      scopes:
-        - https://www.googleapis.com/auth/pubsub
-      state: present
+    name: test-topic1
+    project: test_project
+    auth_kind: serviceaccount
+    service_account_file: "/tmp/auth.pem"
+    state: present
 '''
 
 RETURN = '''
-    name:
-        description:
-            - Name of the topic.
-        returned: success
-        type: str
+name:
+  description:
+  - Name of the topic.
+  returned: success
+  type: str
+kmsKeyName:
+  description:
+  - The resource name of the Cloud KMS CryptoKey to be used to protect access to messsages
+    published on this topic. Your project's PubSub service account (`service-{{PROJECT_NUMBER}}@gcp-sa-pubsub.iam.gserviceaccount.com`)
+    must have `roles/cloudkms.cryptoKeyEncrypterDecrypter` to use this feature.
+  - The expected format is `projects/*/locations/*/keyRings/*/cryptoKeys/*` .
+  returned: success
+  type: str
+labels:
+  description:
+  - A set of key/value label pairs to assign to this Topic.
+  returned: success
+  type: dict
 '''
 
 ################################################################################
@@ -79,6 +107,7 @@ RETURN = '''
 
 from ansible.module_utils.gcp_utils import navigate_hash, GcpSession, GcpModule, GcpRequest, replace_resource_dict
 import json
+import re
 
 ################################################################################
 # Main
@@ -91,9 +120,14 @@ def main():
     module = GcpModule(
         argument_spec=dict(
             state=dict(default='present', choices=['present', 'absent'], type='str'),
-            name=dict(type='str')
+            name=dict(required=True, type='str'),
+            kms_key_name=dict(type='str'),
+            labels=dict(type='dict'),
         )
     )
+
+    if not module.params['scopes']:
+        module.params['scopes'] = ['https://www.googleapis.com/auth/pubsub']
 
     state = module.params['state']
 
@@ -103,7 +137,8 @@ def main():
     if fetch:
         if state == 'present':
             if is_different(module, fetch):
-                fetch = update(module, self_link(module))
+                update(module, self_link(module), fetch)
+                fetch = fetch_resource(module, self_link(module))
                 changed = True
         else:
             delete(module, self_link(module))
@@ -126,9 +161,19 @@ def create(module, link):
     return return_if_object(module, auth.put(link, resource_to_request(module)))
 
 
-def update(module, link):
+def update(module, link, fetch):
     auth = GcpSession(module, 'pubsub')
-    return return_if_object(module, auth.put(link, resource_to_request(module)))
+    params = {'updateMask': updateMask(resource_to_request(module), response_to_hash(module, fetch))}
+    request = resource_to_request(module)
+    del request['name']
+    return return_if_object(module, auth.patch(link, request, params=params))
+
+
+def updateMask(request, response):
+    update_mask = []
+    if request.get('labels') != response.get('labels'):
+        update_mask.append('labels')
+    return ','.join(update_mask)
 
 
 def delete(module, link):
@@ -138,20 +183,21 @@ def delete(module, link):
 
 def resource_to_request(module):
     request = {
-        u'name': module.params.get('name')
+        u'name': name_pattern(module.params.get('name'), module),
+        u'kmsKeyName': module.params.get('kms_key_name'),
+        u'labels': module.params.get('labels'),
     }
-    request = encode_request(request, module)
     return_vals = {}
     for k, v in request.items():
-        if v:
+        if v or v is False:
             return_vals[k] = v
 
     return return_vals
 
 
-def fetch_resource(module, link):
+def fetch_resource(module, link, allow_not_found=True):
     auth = GcpSession(module, 'pubsub')
-    return return_if_object(module, auth.get(link))
+    return return_if_object(module, auth.get(link), allow_not_found)
 
 
 def self_link(module):
@@ -162,9 +208,9 @@ def collection(module):
     return "https://pubsub.googleapis.com/v1/projects/{project}/topics".format(**module.params)
 
 
-def return_if_object(module, response):
+def return_if_object(module, response, allow_not_found=False):
     # If not found, return nothing.
-    if response.status_code == 404:
+    if allow_not_found and response.status_code == 404:
         return None
 
     # If no content, return nothing.
@@ -174,10 +220,8 @@ def return_if_object(module, response):
     try:
         module.raise_for_status(response)
         result = response.json()
-    except getattr(json.decoder, 'JSONDecodeError', ValueError) as inst:
-        module.fail_json(msg="Invalid JSON response with error: %s" % inst)
-
-    result = decode_request(result, module)
+    except getattr(json.decoder, 'JSONDecodeError', ValueError):
+        module.fail_json(msg="Invalid JSON response with error: %s" % response.text)
 
     if navigate_hash(result, ['error', 'errors']):
         module.fail_json(msg=navigate_hash(result, ['error', 'errors']))
@@ -188,7 +232,6 @@ def return_if_object(module, response):
 def is_different(module, response):
     request = resource_to_request(module)
     response = response_to_hash(module, response)
-    request = decode_request(request, module)
 
     # Remove all output-only from response.
     response_vals = {}
@@ -207,21 +250,20 @@ def is_different(module, response):
 # Remove unnecessary properties from the response.
 # This is for doing comparisons with Ansible's current parameters.
 def response_to_hash(module, response):
-    return {
-        u'name': response.get(u'name')
-    }
+    return {u'name': name_pattern(module.params.get('name'), module), u'kmsKeyName': module.params.get('kms_key_name'), u'labels': response.get(u'labels')}
 
 
-def decode_request(response, module):
-    if 'name' in response:
-        response['name'] = response['name'].split('/')[-1]
-    return response
+def name_pattern(name, module):
+    if name is None:
+        return
 
+    regex = r"projects/.*/topics/.*"
 
-def encode_request(request, module):
-    request['name'] = '/'.join(['projects', module.params['project'],
-                                'topics', module.params['name']])
-    return request
+    if not re.match(regex, name):
+        name = "projects/{project}/topics/{name}".format(**module.params)
+
+    return name
+
 
 if __name__ == '__main__':
     main()

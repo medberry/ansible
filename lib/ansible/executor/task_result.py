@@ -5,14 +5,21 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
-from copy import deepcopy
-
 from ansible import constants as C
 from ansible.parsing.dataloader import DataLoader
-from ansible.vars.clean import strip_internal_keys
+from ansible.vars.clean import module_response_deepcopy, strip_internal_keys
 
 _IGNORE = ('failed', 'skipped')
 _PRESERVE = ('attempts', 'changed', 'retries')
+_SUB_PRESERVE = {'_ansible_delegated_vars': ('ansible_host', 'ansible_port', 'ansible_user', 'ansible_connection')}
+
+# stuff callbacks need
+CLEAN_EXCEPTIONS = (
+    '_ansible_verbose_always',  # for debug and other actions, to always expand data (pretty jsonification)
+    '_ansible_item_label',  # to know actual 'item' variable
+    '_ansible_no_log',  # jic we didnt clean up well enough, DON'T LOG
+    '_ansible_verbose_override',  # controls display of ansible_facts, gathering would be very noise with -v otherwise
+)
 
 
 class TaskResult:
@@ -112,14 +119,26 @@ class TaskResult:
         else:
             ignore = _IGNORE
 
-        if self._task.no_log or self._result.get('_ansible_no_log', False):
+        subset = {}
+        # preserve subset for later
+        for sub in _SUB_PRESERVE:
+            if sub in self._result:
+                subset[sub] = {}
+                for key in _SUB_PRESERVE[sub]:
+                    if key in self._result[sub]:
+                        subset[sub][key] = self._result[sub][key]
+
+        if isinstance(self._task.no_log, bool) and self._task.no_log or self._result.get('_ansible_no_log', False):
             x = {"censored": "the output has been hidden due to the fact that 'no_log: true' was specified for this result"}
+
+            # preserve full
             for preserve in _PRESERVE:
                 if preserve in self._result:
                     x[preserve] = self._result[preserve]
+
             result._result = x
         elif self._result:
-            result._result = deepcopy(self._result)
+            result._result = module_response_deepcopy(self._result)
 
             # actualy remove
             for remove_key in ignore:
@@ -127,6 +146,9 @@ class TaskResult:
                     del result._result[remove_key]
 
             # remove almost ALL internal keys, keep ones relevant to callback
-            strip_internal_keys(result._result, exceptions=('_ansible_verbose_always', '_ansible_item_label', '_ansible_no_log'))
+            strip_internal_keys(result._result, exceptions=CLEAN_EXCEPTIONS)
+
+        # keep subset
+        result._result.update(subset)
 
         return result

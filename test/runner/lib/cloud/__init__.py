@@ -1,5 +1,6 @@
 """Plugin system for cloud providers and environments for use in integration tests."""
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import abc
 import atexit
@@ -253,7 +254,7 @@ class CloudProvider(CloudBase):
     """Base class for cloud provider plugins. Sets up cloud resources before delegation."""
     TEST_DIR = 'test/integration'
 
-    def __init__(self, args, config_extension='.yml'):
+    def __init__(self, args, config_extension='.ini'):
         """
         :type args: IntegrationConfig
         :type config_extension: str
@@ -387,26 +388,30 @@ class CloudEnvironment(CloudBase):
 
     def setup(self):
         """Setup which should be done once per environment instead of once per test target."""
-        pass
 
     @abc.abstractmethod
-    def configure_environment(self, env, cmd):
-        """Configuration which should be done once for each test target.
-        :type env: dict[str, str]
-        :type cmd: list[str]
+    def get_environment_config(self):
         """
-        pass
+        :rtype: CloudEnvironmentConfig
+        """
 
     def on_failure(self, target, tries):
         """
         :type target: IntegrationTarget
         :type tries: int
         """
-        pass
 
-    @property
-    def inventory_hosts(self):
+
+class CloudEnvironmentConfig:
+    """Configuration for the environment."""
+    def __init__(self, env_vars=None, ansible_vars=None, module_defaults=None, callback_plugins=None):
         """
-        :rtype: str | None
+        :type env_vars: dict[str, str] | None
+        :type ansible_vars: dict[str, any] | None
+        :type module_defaults: dict[str, dict[str, any]] | None
+        :type callback_plugins: list[str] | None
         """
-        return None
+        self.env_vars = env_vars
+        self.ansible_vars = ansible_vars
+        self.module_defaults = module_defaults
+        self.callback_plugins = callback_plugins

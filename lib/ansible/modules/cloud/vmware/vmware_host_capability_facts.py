@@ -46,6 +46,7 @@ EXAMPLES = r'''
     username: '{{ vcenter_username }}'
     password: '{{ vcenter_password }}'
     cluster_name: cluster_name
+  delegate_to: localhost
   register: all_cluster_hosts_facts
 
 - name: Gather capability facts about ESXi Host
@@ -54,12 +55,13 @@ EXAMPLES = r'''
     username: '{{ vcenter_username }}'
     password: '{{ vcenter_password }}'
     esxi_hostname: '{{ esxi_hostname }}'
+  delegate_to: localhost
   register: hosts_facts
 '''
 
 RETURN = r'''
 hosts_capability_facts:
-    description: metadata about host's capability infromation
+    description: metadata about host's capability information
     returned: always
     type: dict
     sample: {
@@ -205,7 +207,8 @@ def main():
         argument_spec=argument_spec,
         required_one_of=[
             ['cluster_name', 'esxi_hostname'],
-        ]
+        ],
+        supports_check_mode=True,
     )
 
     host_capability_manager = CapabilityFactsManager(module)

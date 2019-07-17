@@ -1,7 +1,6 @@
 #!powershell
-# This file is part of Ansible
 
-# Copyright (c) 2017 Ansible Project
+# Copyright: (c) 2017, Ansible Project
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 #Requires -Module Ansible.ModuleUtils.Legacy
@@ -69,7 +68,7 @@ namespace Ansible
                 } catch
                 {
                     throw new ArgumentException(String.Format("SID string {0} could not be converted to SecurityIdentifier", sidString));
-                }                    
+                }
 
                 Byte[] buffer = new Byte[sid.BinaryLength];
                 sid.GetBinaryForm(buffer, 0);
@@ -268,14 +267,11 @@ namespace Ansible
 "@
 
 $original_tmp = $env:TMP
-$original_temp = $env:TEMP
 $env:TMP = $_remote_tmp
-$env:TEMP = $_remote_tmp
 Add-Type -TypeDefinition $sec_helper_util
 $env:TMP = $original_tmp
-$env:TEMP = $original_temp
 
-Function Compare-UserList($existing_users, $new_users) {  
+Function Compare-UserList($existing_users, $new_users) {
     $added_users = [String[]]@()
     $removed_users = [String[]]@()
     if ($action -eq "add") {
@@ -300,7 +296,8 @@ $lsa_helper = New-Object -TypeName Ansible.LsaRightHelper
 
 $new_users = [System.Collections.ArrayList]@()
 foreach ($user in $users) {
-    $new_users.Add((Convert-ToSID -account_name $user))
+    $user_sid = Convert-ToSID -account_name $user
+    $new_users.Add($user_sid) > $null
 }
 $new_users = [String[]]$new_users.ToArray()
 try {
@@ -325,7 +322,7 @@ if (($change_result.added.Length -gt 0) -or ($change_result.removed.Length -gt 0
         $user_name = Convert-FromSID -sid $user
         $result.removed += $user_name
         $diff_text += "-$user_name`n"
-        $new_user_list.Remove($user)
+        $new_user_list.Remove($user) > $null
     }
     foreach ($user in $change_result.added) {
         if (-not $check_mode) {
@@ -334,9 +331,9 @@ if (($change_result.added.Length -gt 0) -or ($change_result.removed.Length -gt 0
         $user_name = Convert-FromSID -sid $user
         $result.added += $user_name
         $diff_text += "+$user_name`n"
-        $new_user_list.Add($user)
+        $new_user_list.Add($user) > $null
     }
-    
+
     if ($diff_mode) {
         if ($new_user_list.Count -eq 0) {
             $diff_text = "-$diff_text"

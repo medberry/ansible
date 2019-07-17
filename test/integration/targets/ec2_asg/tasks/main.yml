@@ -415,7 +415,7 @@
       register: asg_job
 
     - name: get ec2_asg facts for 3 minutes
-      ec2_asg_facts:
+      ec2_asg_info:
         name: "{{ resource_prefix }}-asg"
         <<: *aws_connection_info
       register: output
@@ -435,7 +435,7 @@
     - name: Ensure ec2_asg task completes
       async_status: jid="{{ asg_job.ansible_job_id }}"
       register: status
-      until: status.finished
+      until: status is finished
       retries: 200
       delay: 15
 
@@ -475,9 +475,9 @@
       poll: 0
       register: asg_job
 
-    # Collect ec2_asg_facts for 3 minutes
-    - name: get ec2_asg facts
-      ec2_asg_facts:
+    # Collect ec2_asg_info for 3 minutes
+    - name: get ec2_asg information
+      ec2_asg_info:
         name: "{{ resource_prefix }}-asg"
         <<: *aws_connection_info
       register: output
@@ -497,7 +497,7 @@
     - name: Ensure ec2_asg task completes
       async_status: jid="{{ asg_job.ansible_job_id }}"
       register: status
-      until: status.finished
+      until: status is finished
       retries: 200
       delay: 15
 

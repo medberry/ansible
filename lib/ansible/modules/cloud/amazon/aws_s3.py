@@ -52,6 +52,7 @@ options:
       - When set for PUT mode, asks for server-side encryption.
     default: True
     version_added: "2.0"
+    type: bool
   encryption_mode:
     description:
       - What encryption mode to use if C(encrypt) is set
@@ -114,7 +115,7 @@ options:
         Boolean or one of [always, never, different], true is equal to 'always' and false is equal to 'never', new in 2.0.
         When this is set to 'different', the md5 sum of the local file is compared with the 'ETag' of the object/key in S3.
         The ETag may or may not be an MD5 digest of the object data. See the ETag response header here
-        U(http://docs.aws.amazon.com/AmazonS3/latest/API/RESTCommonResponseHeaders.html)
+        U(https://docs.aws.amazon.com/AmazonS3/latest/API/RESTCommonResponseHeaders.html)
     default: 'always'
     aliases: ['force']
     version_added: "1.2"
@@ -131,13 +132,21 @@ options:
     version_added: "2.0"
   s3_url:
     description:
-      - S3 URL endpoint for usage with Ceph, Eucalypus, fakes3, etc.  Otherwise assumes AWS
+      - S3 URL endpoint for usage with Ceph, Eucalyptus and fakes3 etc. Otherwise assumes AWS.
     aliases: [ S3_URL ]
+  dualstack:
+    description:
+      - Enables Amazon S3 Dual-Stack Endpoints, allowing S3 communications using both IPv4 and IPv6.
+      - Requires at least botocore version 1.4.45.
+    type: bool
+    default: "no"
+    version_added: "2.7"
   rgw:
     description:
       - Enable Ceph RGW S3 support. This option requires an explicit url via s3_url.
     default: false
     version_added: "2.2"
+    type: bool
   src:
     description:
       - The source file path when performing a PUT operation.
@@ -148,6 +157,7 @@ options:
         GetObject permission but no other permissions. In this case using the option mode: get will fail without specifying
         ignore_nonexistent_bucket: True."
     version_added: "2.3"
+    type: bool
   encryption_kms_key_id:
     description:
       - KMS key id to use when encrypting objects using C(aws:kms) encryption. Ignored if encryption is not C(aws:kms)
@@ -260,12 +270,12 @@ RETURN = '''
 msg:
   description: msg indicating the status of the operation
   returned: always
-  type: string
+  type: str
   sample: PUT operation complete
 url:
   description: url of the object
   returned: (for put and geturl operations)
-  type: string
+  type: str
   sample: https://my-bucket.s3.amazonaws.com/my-key.txt?AWSAccessKeyId=<access-key>&Expires=1506888865&Signature=<signature>
 expiry:
   description: number of seconds the presigned url is valid for
@@ -275,7 +285,7 @@ expiry:
 contents:
   description: contents of the object as string
   returned: (for getstr operation)
-  type: string
+  type: str
   sample: "Hello, world!"
 s3_keys:
   description: list of object keys
@@ -287,14 +297,14 @@ s3_keys:
   - prefix1/key2
 '''
 
-import hashlib
 import mimetypes
 import os
 from ansible.module_utils.six.moves.urllib.parse import urlparse
 from ssl import SSLError
 from ansible.module_utils.basic import to_text, to_native
 from ansible.module_utils.aws.core import AnsibleAWSModule
-from ansible.module_utils.ec2 import ec2_argument_spec, get_aws_connection_info, boto3_conn
+from ansible.module_utils.aws.s3 import calculate_etag, HAS_MD5
+from ansible.module_utils.ec2 import get_aws_connection_info, boto3_conn
 
 try:
     import botocore
@@ -330,42 +340,21 @@ def key_check(module, s3, bucket, obj, version=None, validate=True):
     return exists
 
 
-def keysum_compare(module, local_file, s3, bucket, obj, version=None):
-    s3_keysum = keysum(s3, bucket, obj, version=version)
-    if '-' in s3_keysum:  # Check for multipart, ETag is not a proper MD5 sum
-        parts = int(s3_keysum.split('-')[1])
-        md5s = []
+def etag_compare(module, local_file, s3, bucket, obj, version=None):
+    s3_etag = get_etag(s3, bucket, obj, version=version)
+    local_etag = calculate_etag(module, local_file, s3_etag, s3, bucket, obj, version)
 
-        with open(local_file, 'rb') as f:
-            for part_num in range(1, parts + 1):
-                # Get the part size for every part of the multipart uploaded object
-                if version:
-                    key_head = s3.head_object(Bucket=bucket, Key=obj, VersionId=version, PartNumber=part_num)
-                else:
-                    key_head = s3.head_object(Bucket=bucket, Key=obj, PartNumber=part_num)
-                part_size = int(key_head['ContentLength'])
-                data = f.read(part_size)
-                hash = hashlib.md5(data)
-                md5s.append(hash)
-
-        digests = b''.join(m.digest() for m in md5s)
-        digests_md5 = hashlib.md5(digests)
-        local_keysum = '{0}-{1}'.format(digests_md5.hexdigest(), len(md5s))
-    else:  # Compute the MD5 sum normally
-        local_keysum = module.md5(local_file)
-
-    return s3_keysum == local_keysum
+    return s3_etag == local_etag
 
 
-def keysum(s3, bucket, obj, version=None):
+def get_etag(s3, bucket, obj, version=None):
     if version:
         key_check = s3.head_object(Bucket=bucket, Key=obj, VersionId=version)
     else:
         key_check = s3.head_object(Bucket=bucket, Key=obj)
     if not key_check:
         return None
-    md5_remote = key_check['ETag'][1:-1]
-    return md5_remote
+    return key_check['ETag']
 
 
 def bucket_check(module, s3, bucket, validate=True):
@@ -573,9 +562,10 @@ def download_s3file(module, s3, bucket, obj, dest, retries, version=None):
     except botocore.exceptions.BotoCoreError as e:
         module.fail_json_aws(e, msg="Could not find the key %s." % obj)
 
+    optional_kwargs = {'ExtraArgs': {'VersionId': version}} if version else {}
     for x in range(0, retries + 1):
         try:
-            s3.download_file(bucket, obj, dest)
+            s3.download_file(bucket, obj, dest, **optional_kwargs)
             module.exit_json(msg="GET operation complete", changed=True)
         except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
             # actually fail on last pass through the loop.
@@ -649,35 +639,39 @@ def get_s3_connection(module, aws_connect_kwargs, location, rgw, s3_url, sig_4=F
             params['config'] = botocore.client.Config(signature_version='s3v4')
         elif module.params['mode'] in ('get', 'getstr') and sig_4:
             params['config'] = botocore.client.Config(signature_version='s3v4')
+        if module.params['dualstack']:
+            dualconf = botocore.client.Config(s3={'use_dualstack_endpoint': True})
+            if 'config' in params:
+                params['config'] = params['config'].merge(dualconf)
+            else:
+                params['config'] = dualconf
     return boto3_conn(**params)
 
 
 def main():
-    argument_spec = ec2_argument_spec()
-    argument_spec.update(
-        dict(
-            bucket=dict(required=True),
-            dest=dict(default=None, type='path'),
-            encrypt=dict(default=True, type='bool'),
-            encryption_mode=dict(choices=['AES256', 'aws:kms'], default='AES256'),
-            expiry=dict(default=600, type='int', aliases=['expiration']),
-            headers=dict(type='dict'),
-            marker=dict(default=""),
-            max_keys=dict(default=1000, type='int'),
-            metadata=dict(type='dict'),
-            mode=dict(choices=['get', 'put', 'delete', 'create', 'geturl', 'getstr', 'delobj', 'list'], required=True),
-            object=dict(),
-            permission=dict(type='list', default=['private']),
-            version=dict(default=None),
-            overwrite=dict(aliases=['force'], default='always'),
-            prefix=dict(default=""),
-            retries=dict(aliases=['retry'], type='int', default=0),
-            s3_url=dict(aliases=['S3_URL']),
-            rgw=dict(default='no', type='bool'),
-            src=dict(),
-            ignore_nonexistent_bucket=dict(default=False, type='bool'),
-            encryption_kms_key_id=dict()
-        ),
+    argument_spec = dict(
+        bucket=dict(required=True),
+        dest=dict(default=None, type='path'),
+        encrypt=dict(default=True, type='bool'),
+        encryption_mode=dict(choices=['AES256', 'aws:kms'], default='AES256'),
+        expiry=dict(default=600, type='int', aliases=['expiration']),
+        headers=dict(type='dict'),
+        marker=dict(default=""),
+        max_keys=dict(default=1000, type='int'),
+        metadata=dict(type='dict'),
+        mode=dict(choices=['get', 'put', 'delete', 'create', 'geturl', 'getstr', 'delobj', 'list'], required=True),
+        object=dict(),
+        permission=dict(type='list', default=['private']),
+        version=dict(default=None),
+        overwrite=dict(aliases=['force'], default='always'),
+        prefix=dict(default=""),
+        retries=dict(aliases=['retry'], type='int', default=0),
+        s3_url=dict(aliases=['S3_URL']),
+        dualstack=dict(default='no', type='bool'),
+        rgw=dict(default='no', type='bool'),
+        src=dict(),
+        ignore_nonexistent_bucket=dict(default=False, type='bool'),
+        encryption_kms_key_id=dict()
     )
     module = AnsibleAWSModule(
         argument_spec=argument_spec,
@@ -687,9 +681,6 @@ def main():
                      ['mode', 'getstr', ['object']],
                      ['mode', 'geturl', ['object']]],
     )
-
-    if module._name == 's3':
-        module.deprecate("The 's3' module is being renamed 'aws_s3'", version=2.7)
 
     bucket = module.params.get('bucket')
     encrypt = module.params.get('encrypt')
@@ -706,6 +697,7 @@ def main():
     prefix = module.params.get('prefix')
     retries = module.params.get('retries')
     s3_url = module.params.get('s3_url')
+    dualstack = module.params.get('dualstack')
     rgw = module.params.get('rgw')
     src = module.params.get('src')
     ignore_nonexistent_bucket = module.params.get('ignore_nonexistent_bucket')
@@ -718,6 +710,9 @@ def main():
             overwrite = 'always'
         else:
             overwrite = 'never'
+
+    if overwrite == 'different' and not HAS_MD5:
+        module.fail_json(msg='overwrite=different is unavailable: ETag calculation requires MD5 support')
 
     region, ec2_url, aws_connect_kwargs = get_aws_connection_info(module, boto3=True)
 
@@ -743,6 +738,12 @@ def main():
     # allow eucarc environment variables to be used if ansible vars aren't set
     if not s3_url and 'S3_URL' in os.environ:
         s3_url = os.environ['S3_URL']
+
+    if dualstack and s3_url is not None and 'amazonaws.com' not in s3_url:
+        module.fail_json(msg='dualstack only applies to AWS S3')
+
+    if dualstack and not module.botocore_at_least('1.4.45'):
+        module.fail_json(msg='dualstack requires botocore >= 1.4.45')
 
     # rgw requires an explicit url
     if rgw and not s3_url:
@@ -770,9 +771,7 @@ def main():
     if validate and mode not in ('create', 'put', 'delete') and not bucketrtn:
         module.fail_json(msg="Source bucket cannot be found.")
 
-    # If our mode is a GET operation (download), go through the procedure as appropriate ...
     if mode == 'get':
-        # Next, we check to see if the key in the bucket exists. If it exists, it also returns key_matches md5sum check.
         keyrtn = key_check(module, s3, bucket, obj, version=version, validate=validate)
         if keyrtn is False:
             if version:
@@ -780,86 +779,42 @@ def main():
             else:
                 module.fail_json(msg="Key %s does not exist." % obj)
 
-        # If the destination path doesn't exist or overwrite is True, no need to do the md5sum ETag check, so just download.
-        # Compare the remote MD5 sum of the object with the local dest md5sum, if it already exists.
-        if path_check(dest):
-            # Determine if the remote and local object are identical
-            if keysum_compare(module, dest, s3, bucket, obj, version=version):
-                sum_matches = True
-                if overwrite == 'always':
-                    try:
-                        download_s3file(module, s3, bucket, obj, dest, retries, version=version)
-                    except Sigv4Required:
-                        s3 = get_s3_connection(module, aws_connect_kwargs, location, rgw, s3_url, sig_4=True)
-                        download_s3file(module, s3, bucket, obj, dest, retries, version=version)
-                else:
-                    module.exit_json(msg="Local and remote object are identical, ignoring. Use overwrite=always parameter to force.", changed=False)
-            else:
-                sum_matches = False
+        if path_check(dest) and overwrite != 'always':
+            if overwrite == 'never':
+                module.exit_json(msg="Local object already exists and overwrite is disabled.", changed=False)
+            if etag_compare(module, dest, s3, bucket, obj, version=version):
+                module.exit_json(msg="Local and remote object are identical, ignoring. Use overwrite=always parameter to force.", changed=False)
 
-                if overwrite in ('always', 'different'):
-                    try:
-                        download_s3file(module, s3, bucket, obj, dest, retries, version=version)
-                    except Sigv4Required:
-                        s3 = get_s3_connection(module, aws_connect_kwargs, location, rgw, s3_url, sig_4=True)
-                        download_s3file(module, s3, bucket, obj, dest, retries, version=version)
-                else:
-                    module.exit_json(msg="WARNING: Checksums do not match. Use overwrite parameter to force download.")
-        else:
-            try:
-                download_s3file(module, s3, bucket, obj, dest, retries, version=version)
-            except Sigv4Required:
-                s3 = get_s3_connection(module, aws_connect_kwargs, location, rgw, s3_url, sig_4=True)
-                download_s3file(module, s3, bucket, obj, dest, retries, version=version)
+        try:
+            download_s3file(module, s3, bucket, obj, dest, retries, version=version)
+        except Sigv4Required:
+            s3 = get_s3_connection(module, aws_connect_kwargs, location, rgw, s3_url, sig_4=True)
+            download_s3file(module, s3, bucket, obj, dest, retries, version=version)
 
-    # if our mode is a PUT operation (upload), go through the procedure as appropriate ...
     if mode == 'put':
 
         # if putting an object in a bucket yet to be created, acls for the bucket and/or the object may be specified
         # these were separated into the variables bucket_acl and object_acl above
 
-        # Lets check the src path.
         if not path_check(src):
             module.fail_json(msg="Local object for PUT does not exist")
 
-        # Lets check to see if bucket exists to get ground truth.
         if bucketrtn:
             keyrtn = key_check(module, s3, bucket, obj, version=version, validate=validate)
-
-        # Lets check key state. Does it exist and if it does, compute the ETag md5sum.
-        if bucketrtn and keyrtn:
-            # Compare the local and remote object
-            if keysum_compare(module, src, s3, bucket, obj):
-                sum_matches = True
-                if overwrite == 'always':
-                    # only use valid object acls for the upload_s3file function
-                    module.params['permission'] = object_acl
-                    upload_s3file(module, s3, bucket, obj, src, expiry, metadata, encrypt, headers)
-                else:
-                    get_download_url(module, s3, bucket, obj, expiry, changed=False)
-            else:
-                sum_matches = False
-                if overwrite in ('always', 'different'):
-                    # only use valid object acls for the upload_s3file function
-                    module.params['permission'] = object_acl
-                    upload_s3file(module, s3, bucket, obj, src, expiry, metadata, encrypt, headers)
-                else:
-                    module.exit_json(msg="WARNING: Checksums do not match. Use overwrite parameter to force upload.")
-
-        # If neither exist (based on bucket existence), we can create both.
-        if not bucketrtn:
+        else:
+            # If the bucket doesn't exist we should create it.
             # only use valid bucket acls for create_bucket function
             module.params['permission'] = bucket_acl
             create_bucket(module, s3, bucket, location)
-            # only use valid object acls for the upload_s3file function
-            module.params['permission'] = object_acl
-            upload_s3file(module, s3, bucket, obj, src, expiry, metadata, encrypt, headers)
 
-        # If bucket exists but key doesn't, just upload.
-        if bucketrtn and not keyrtn:
-            # only use valid object acls for the upload_s3file function
-            module.params['permission'] = object_acl
-            upload_s3file(module, s3, bucket, obj, src, expiry, metadata, encrypt, headers)
+        if keyrtn and overwrite != 'always':
+            if overwrite == 'never' or etag_compare(module, src, s3, bucket, obj):
+                # Return the download URL for the existing object
+                get_download_url(module, s3, bucket, obj, expiry, changed=False)
+
+        # only use valid object acls for the upload_s3file function
+        module.params['permission'] = object_acl
+        upload_s3file(module, s3, bucket, obj, src, expiry, metadata, encrypt, headers)
 
     # Delete an object from a bucket, not the entire bucket
     if mode == 'delobj':

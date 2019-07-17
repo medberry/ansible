@@ -1,6 +1,6 @@
 """Access Ansible Core CI remote services."""
-
-from __future__ import absolute_import, print_function
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import json
 import os
@@ -18,10 +18,13 @@ from lib.http import (
 
 from lib.util import (
     ApplicationError,
-    run_command,
     make_dirs,
     display,
     is_shippable,
+)
+
+from lib.util_common import (
+    run_command,
 )
 
 from lib.config import (
@@ -34,7 +37,7 @@ AWS_ENDPOINTS = {
 }
 
 
-class AnsibleCoreCI(object):
+class AnsibleCoreCI:
     """Client for Ansible Core CI services."""
     def __init__(self, args, platform, version, stage='prod', persist=True, load=True, name=None, provider=None):
         """
@@ -70,16 +73,17 @@ class AnsibleCoreCI(object):
                 'junos',
                 'ios',
                 'tower',
+                'rhel',
+                'hetzner',
             ),
             azure=(
                 'azure',
-                'rhel',
-                'windows/2012',
-                'windows/2012-R2',
-                'windows/2016',
             ),
             parallels=(
                 'osx',
+            ),
+            vmware=(
+                'vmware'
             ),
         )
 
@@ -97,6 +101,8 @@ class AnsibleCoreCI(object):
                     # assign default provider based on platform and version
                     self.provider = candidate
                     break
+
+        self.path = os.path.expanduser('~/.ansible/test/instances/%s-%s-%s' % (self.name, self.provider, self.stage))
 
         if self.provider in ('aws', 'azure'):
             if self.provider != 'aws':
@@ -117,13 +123,13 @@ class AnsibleCoreCI(object):
                 # send all non-Shippable jobs to us-east-1 to reduce api key maintenance
                 region = 'us-east-1'
 
-            self.endpoints = AWS_ENDPOINTS[region],
+            self.path = "%s-%s" % (self.path, region)
+            self.endpoints = (AWS_ENDPOINTS[region],)
+            self.ssh_key = SshKey(args)
 
             if self.platform == 'windows':
-                self.ssh_key = None
                 self.port = 5986
             else:
-                self.ssh_key = SshKey(args)
                 self.port = 22
         elif self.provider == 'parallels':
             self.endpoints = self._get_parallels_endpoints()
@@ -131,10 +137,13 @@ class AnsibleCoreCI(object):
 
             self.ssh_key = SshKey(args)
             self.port = None
+        elif self.provider == 'vmware':
+            self.ssh_key = SshKey(args)
+            self.endpoints = ['https://access.ws.testing.ansible.com']
+            self.max_threshold = 1
+
         else:
             raise ApplicationError('Unsupported platform: %s' % platform)
-
-        self.path = os.path.expanduser('~/.ansible/test/instances/%s-%s-%s' % (self.name, self.provider, self.stage))
 
         if persist and load and self._load():
             try:
@@ -177,7 +186,7 @@ class AnsibleCoreCI(object):
         display.info('Getting available endpoints...', verbosity=1)
         sleep = 3
 
-        for _ in range(1, 10):
+        for _iteration in range(1, 10):
             response = client.get('https://s3.amazonaws.com/ansible-ci-files/ansible-test/parallels-endpoints.txt')
 
             if response.status_code == 200:
@@ -195,7 +204,7 @@ class AnsibleCoreCI(object):
         if self.started:
             display.info('Skipping started %s/%s instance %s.' % (self.platform, self.version, self.instance_id),
                          verbosity=1)
-            return
+            return None
 
         if is_shippable():
             return self.start_shippable()
@@ -303,7 +312,7 @@ class AnsibleCoreCI(object):
             )
 
             if self.connection.password:
-                display.sensitive.add(self.connection.password)
+                display.sensitive.add(str(self.connection.password))
 
         status = 'running' if self.connection.running else 'starting'
 
@@ -315,7 +324,7 @@ class AnsibleCoreCI(object):
 
     def wait(self):
         """Wait for the instance to become ready."""
-        for _ in range(1, 90):
+        for _iteration in range(1, 90):
             if self.get().running:
                 return
             time.sleep(10)
@@ -455,7 +464,7 @@ class AnsibleCoreCI(object):
         :type config: dict[str, str]
         :rtype: bool
         """
-        self.instance_id = config['instance_id']
+        self.instance_id = str(config['instance_id'])
         self.endpoint = config['endpoint']
         self.started = True
 
@@ -499,7 +508,14 @@ class AnsibleCoreCI(object):
         elif 'errorMessage' in response_json:
             message = response_json['errorMessage'].strip()
             if 'stackTrace' in response_json:
-                trace = '\n'.join([x.rstrip() for x in traceback.format_list(response_json['stackTrace'])])
+                traceback_lines = response_json['stackTrace']
+
+                # AWS Lambda on Python 2.7 returns a list of tuples
+                # AWS Lambda on Python 3.7 returns a list of strings
+                if traceback_lines and isinstance(traceback_lines[0], list):
+                    traceback_lines = traceback.format_list(traceback_lines)
+
+                trace = '\n'.join([x.rstrip() for x in traceback_lines])
                 stack_trace = ('\nTraceback (from remote server):\n%s' % trace)
         else:
             message = str(response_json)
@@ -521,7 +537,7 @@ class CoreHttpError(HttpError):
         self.remote_stack_trace = remote_stack_trace
 
 
-class SshKey(object):
+class SshKey:
     """Container for SSH key used to connect to remote instances."""
     KEY_NAME = 'id_rsa'
     PUB_NAME = 'id_rsa.pub'
@@ -545,7 +561,7 @@ class SshKey(object):
                 make_dirs(base_dir)
 
             if not os.path.isfile(key) or not os.path.isfile(pub):
-                run_command(args, ['ssh-keygen', '-q', '-t', 'rsa', '-N', '', '-f', key])
+                run_command(args, ['ssh-keygen', '-m', 'PEM', '-q', '-t', 'rsa', '-N', '', '-f', key])
 
             if not args.explain:
                 shutil.copy2(key, self.key)
@@ -558,7 +574,7 @@ class SshKey(object):
                 self.pub_contents = pub_fd.read().strip()
 
 
-class InstanceConnection(object):
+class InstanceConnection:
     """Container for remote instance status and connection details."""
     def __init__(self, running, hostname, port, username, password):
         """
